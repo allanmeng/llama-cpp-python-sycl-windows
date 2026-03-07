@@ -1,11 +1,54 @@
-[English](README.md) | [中文](README_zh.md)
+[English](README.md) | [📖 中文文档点这里](README_zh.md)
+
+
 
 # llama-cpp-python-sycl-windows
-Pre-built llama-cpp-python wheels for Windows with Intel GPU (SYCL/oneAPI) support. Optimized for Intel Arc &amp; Data Center GPUs.
 
 Pre-built [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) wheels with **Intel Arc GPU (SYCL)** acceleration for Windows.
 
 Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) which adds SYCL support for Intel Arc GPUs.
+
+---
+
+## ⚠️ Prerequisites
+
+Before installing, you must have the following:
+
+### 1. Intel Arc GPU Driver
+Download and install the latest Intel Arc GPU driver from:
+👉 https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html
+
+### 2. Intel oneAPI Base Toolkit (Required)
+The SYCL runtime depends on Intel oneAPI. You do **not** need to install the full toolkit — only the following components are required:
+
+| Component | Why needed |
+|-----------|-----------|
+| Intel oneAPI DPC++/C++ Compiler | Provides `sycl8.dll`, `OpenCL.dll` runtime |
+| Intel oneAPI Math Kernel Library (oneMKL) | Provides MKL SYCL runtime |
+| Intel oneAPI Deep Neural Network Library (oneDNN) | Provides `dnnl.dll` |
+| Intel oneAPI Threading Building Blocks (oneTBB) | Provides `tbb12.dll` |
+
+Download Intel oneAPI Base Toolkit (select individual components during install):
+👉 https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html
+
+> **Tip:** During installation, you can choose "Custom Installation" and select only the 4 components listed above to save disk space.
+
+### 3. Add oneAPI to your startup script
+
+After installing oneAPI, add the following line to your ComfyUI launch `.bat` file **before** starting Python:
+
+```bat
+call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
+```
+
+Example `start_comfyui.bat`:
+```bat
+@echo off
+call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
+......
+......
+"C:\python\python.exe" main.py --listen 0.0.0.0
+```
 
 ---
 
@@ -15,9 +58,8 @@ Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) wh
 |------|-------------|
 | OS | Windows 10/11 x64 |
 | GPU | Intel Arc (Alchemist / Battlemage) |
-| Python | 3.13.x |
-| Driver | Intel Arc GPU driver (latest recommended) |
-| oneAPI | ❌ Not required (runtime DLLs are bundled) |
+| Driver | Intel Arc GPU driver (latest) |
+| oneAPI | ✅ Required — DPC++ Compiler, oneMKL, oneDNN, oneTBB |
 
 ---
 
@@ -47,40 +89,6 @@ pip install llama_cpp_python-0.3.31+sycl-cp313-cp313-win_amd64.whl
 
 ```
 your_python\Lib\site-packages\llama_cpp\
-```
-
----
-
-## Verify SYCL is Working
-
-Save the following as `check_sycl.py` and run it:
-
-```python
-import ctypes, os
-
-# Add oneAPI DLL search paths if installed, otherwise bundled DLLs will be used
-llama_dir = r'your_python\Lib\site-packages\llama_cpp'
-os.add_dll_directory(llama_dir)
-
-for dll in ['ggml-base.dll', 'dnnl.dll', 'sycl8.dll', 'mkl_sycl_blas.5.dll', 'ggml-sycl.dll']:
-    try:
-        ctypes.CDLL(os.path.join(llama_dir, dll))
-        print(f'OK {dll}')
-    except Exception as e:
-        print(f'FAIL {dll}: {e}')
-
-from llama_cpp.llama_chat_format import Qwen25VLChatHandler, Qwen3VLChatHandler
-print('handlers OK')
-```
-
-Expected output:
-```
-OK ggml-base.dll
-OK dnnl.dll
-OK sycl8.dll
-OK mkl_sycl_blas.5.dll
-OK ggml-sycl.dll
-handlers OK
 ```
 
 ---
@@ -126,13 +134,47 @@ if os.name == "nt":
 
 ### Why prestartup_script.py?
 
-Python 3.8+ on Windows ignores `PATH` when loading DLLs for security reasons.
-`os.add_dll_directory()` must be called explicitly before `llama_cpp` is imported.
-ComfyUI's `prestartup_script.py` mechanism runs before any plugin nodes are imported,
-making it the only reliable place to preload SYCL DLLs.
+#### The Problem
 
-The preload effect is **process-wide**, so all llama-cpp-python based plugins
-(ComfyUI-QwenVL, comfyui-sg-llama-cpp, etc.) will automatically benefit from SYCL acceleration.
+After compiling and installing the SYCL-enabled llama-cpp-python, the GPU works correctly when called directly from a Python script. However, llama-cpp-python based plugins inside ComfyUI (such as image captioning / prompt generation plugins) fail to activate SYCL and fall back to CPU.
+
+The root cause is a **DLL loading restriction introduced in Python 3.8+** on Windows:
+
+> For security reasons, Python 3.8+ completely ignores the `PATH` environment variable when loading DLLs. Even if `setvars.bat` has correctly set up the oneAPI paths in `PATH`, Python will not find the SYCL DLLs through that mechanism. The only reliable way is to call `os.add_dll_directory()` explicitly within Python code before the DLLs are needed.
+
+#### Why not bat or main.py?
+
+- **Launch `.bat` file**: Can set `PATH` and environment variables, but cannot call Python's `os.add_dll_directory()`. The DLL restriction still applies.
+- **ComfyUI `main.py`**: Appears to be an option, but `main.py` begins importing ComfyUI core modules (`import comfy.options`, etc.) at the very first line. These imports can indirectly trigger plugin loading chains, meaning `llama_cpp` may already be imported before any preload code in `main.py` has a chance to run. The timing is too late and unreliable.
+
+#### The Solution: ComfyUI's prestartup mechanism
+
+ComfyUI has a built-in hook called `execute_prestartup_script()`. At startup, ComfyUI scans every subfolder under `custom_nodes\` and executes any file named `prestartup_script.py` it finds there. This happens **before any plugin nodes are imported**, making it the earliest reliable point to run Python code in the ComfyUI process.
+
+The startup order is:
+```
+main.py basic init
+    ↓
+execute_prestartup_script()  ← prestartup_script.py files run here
+    ↓
+Load each plugin's __init__.py / nodes.py
+    ↓
+Start server
+```
+
+Once the SYCL DLLs are loaded via `os.add_dll_directory()` and `ctypes.CDLL()`, the effect is **process-wide**. All subsequent llama-cpp-python based plugins (ComfyUI-QwenVL, comfyui-sg-llama-cpp, etc.) will automatically find the DLLs already in memory — no per-plugin configuration needed.
+
+#### Why a dedicated plugin folder?
+
+Placing `prestartup_script.py` inside an existing plugin folder (e.g. comfyui-sg-llama-cpp) is fragile — if that plugin is deleted or updated, the file disappears. The safest approach is to create a minimal dedicated plugin folder containing only two files:
+
+```
+custom_nodes\sycl-preloader\
+    __init__.py          (empty)
+    prestartup_script.py (SYCL DLL preloader)
+```
+
+This folder has no nodes, no dependencies, and will never be touched by ComfyUI Manager's update mechanism. It serves one purpose only: ensuring the SYCL DLLs are loaded at the right moment for the entire ComfyUI process.
 
 ---
 
