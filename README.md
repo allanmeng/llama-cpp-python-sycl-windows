@@ -110,17 +110,6 @@ import importlib.util
 
 if os.name == "nt":
     try:
-        # Add oneAPI DLL search paths if installed
-        for d in [
-            r"C:\Program Files (x86)\Intel\oneAPI\compiler\latest\bin",
-            r"C:\Program Files (x86)\Intel\oneAPI\mkl\latest\bin",
-            r"C:\Program Files (x86)\Intel\oneAPI\dnnl\latest\bin",
-            r"C:\Program Files (x86)\Intel\oneAPI\tbb\latest\bin\intel64\vc_mt",
-        ]:
-            if os.path.exists(d):
-                os.add_dll_directory(d)
-
-        # Load SYCL DLLs from llama_cpp directory
         _spec = importlib.util.find_spec('llama_cpp')
         _llama_dir = os.path.dirname(_spec.origin) if _spec else None
         if _llama_dir and os.path.exists(_llama_dir):
