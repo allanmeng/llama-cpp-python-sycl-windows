@@ -5,7 +5,7 @@
 ### Added
 - Upgraded to llama-cpp-python 0.3.31
 - Bundled full oneAPI runtime DLLs for standalone deployment (no oneAPI installation required)
-- Added `ur_loader.dll`, `ur_adapter_level_zero.dll`, `ur_adapter_level_zero_v2.dll`
+- Added `ur_loader.dll`, `ur_adapter_level_zero.dll`, `ur_adapter_level_zero_v2.dll`, `ur_win_proxy_loader.dll`
 - Added `ur_adapter_opencl.dll`, `libiomp5md.dll`, `libhwloc-15.dll`
 - Added `umf.dll`, `tcm.dll`, `ggml-rpc.dll`, `svml_dispmd.dll`
 - Support for `Qwen25VLChatHandler` and `Qwen3VLChatHandler`
