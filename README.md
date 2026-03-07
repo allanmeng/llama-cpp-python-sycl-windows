@@ -33,23 +33,6 @@ Download Intel oneAPI Base Toolkit (select individual components during install)
 
 > **Tip:** During installation, you can choose "Custom Installation" and select only the 4 components listed above to save disk space.
 
-### 3. Add oneAPI to your startup script
-
-After installing oneAPI, add the following line to your ComfyUI launch `.bat` file **before** starting Python:
-
-```bat
-call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
-```
-
-Example `start_comfyui.bat`:
-```bat
-@echo off
-call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
-......
-......
-"C:\python\python.exe" main.py --listen 0.0.0.0
-```
-
 ---
 
 ## Requirements
@@ -95,21 +78,40 @@ your_python\Lib\site-packages\llama_cpp\
 
 ## Usage with ComfyUI
 
+### Add oneAPI to your startup script
+
+After installing oneAPI, add the following line to your ComfyUI launch `.bat` file **before** starting Python:
+
+```bat
+call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
+```
+
+Example `start_comfyui.bat`:
+```bat
+@echo off
+call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
+......
+......
+"C:\python\python.exe" main.py --listen 0.0.0.0
+```
+---
+
+### Create a dedicated preloader plugin
 To enable SYCL GPU acceleration for all llama-cpp-python based nodes in ComfyUI, create a dedicated preloader plugin.
 
-### Step 1: Create plugin directory
+#### Step 1: Create plugin directory
 
 ```bat
 mkdir "your_comfyui\custom_nodes\sycl-preloader"
 ```
 
-### Step 2: Create `__init__.py` (empty)
+#### Step 2: Create `__init__.py` (empty)
 
 ```bat
 echo. > "your_comfyui\custom_nodes\sycl-preloader\__init__.py"
 ```
 
-### Step 3: Create `prestartup_script.py`
+#### Step 3: Create `prestartup_script.py`
 
 ```python
 import os
@@ -132,9 +134,9 @@ if os.name == "nt":
         print(f"[SYCL] Error: {e}")
 ```
 
-### Why prestartup_script.py?
+#### Why prestartup_script.py?
 
-#### The Problem
+##### The Problem
 
 After compiling and installing the SYCL-enabled llama-cpp-python, the GPU works correctly when called directly from a Python script. However, llama-cpp-python based plugins inside ComfyUI (such as image captioning / prompt generation plugins) fail to activate SYCL and fall back to CPU.
 
@@ -142,12 +144,12 @@ The root cause is a **DLL loading restriction introduced in Python 3.8+** on Win
 
 > For security reasons, Python 3.8+ completely ignores the `PATH` environment variable when loading DLLs. Even if `setvars.bat` has correctly set up the oneAPI paths in `PATH`, Python will not find the SYCL DLLs through that mechanism. The only reliable way is to call `os.add_dll_directory()` explicitly within Python code before the DLLs are needed.
 
-#### Why not bat or main.py?
+##### Why not bat or main.py?
 
 - **Launch `.bat` file**: Can set `PATH` and environment variables, but cannot call Python's `os.add_dll_directory()`. The DLL restriction still applies.
 - **ComfyUI `main.py`**: Appears to be an option, but `main.py` begins importing ComfyUI core modules (`import comfy.options`, etc.) at the very first line. These imports can indirectly trigger plugin loading chains, meaning `llama_cpp` may already be imported before any preload code in `main.py` has a chance to run. The timing is too late and unreliable.
 
-#### The Solution: ComfyUI's prestartup mechanism
+##### The Solution: ComfyUI's prestartup mechanism
 
 ComfyUI has a built-in hook called `execute_prestartup_script()`. At startup, ComfyUI scans every subfolder under `custom_nodes\` and executes any file named `prestartup_script.py` it finds there. This happens **before any plugin nodes are imported**, making it the earliest reliable point to run Python code in the ComfyUI process.
 
@@ -164,7 +166,7 @@ Start server
 
 Once the SYCL DLLs are loaded via `os.add_dll_directory()` and `ctypes.CDLL()`, the effect is **process-wide**. All subsequent llama-cpp-python based plugins (ComfyUI-QwenVL, comfyui-sg-llama-cpp, etc.) will automatically find the DLLs already in memory — no per-plugin configuration needed.
 
-#### Why a dedicated plugin folder?
+##### Why a dedicated plugin folder?
 
 Placing `prestartup_script.py` inside an existing plugin folder (e.g. comfyui-sg-llama-cpp) is fragile — if that plugin is deleted or updated, the file disappears. The safest approach is to create a minimal dedicated plugin folder containing only two files:
 
