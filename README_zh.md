@@ -88,7 +88,9 @@ call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
 ```bat
 @echo off
 call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
-python main.py --listen 0.0.0.0
+......
+......
+"C:\python\python.exe" main.py --listen 0.0.0.0
 ```
 -----
 
