@@ -50,6 +50,7 @@ Download Intel oneAPI Base Toolkit (select individual components during install)
 
 | Version | File | Size |
 |---------|------|------|
+| 0.3.32 | `llama_cpp_python-0.3.32+sycl-cp313-cp313-win_amd64.whl` | ~19 MB |
 | 0.3.31 | `llama_cpp_python-0.3.31+sycl-cp313-cp313-win_amd64.whl` | ~174 MB |
 | 0.3.30 | `llama_cpp_python-0.3.30+sycl-cp313-cp313-win_amd64.whl` | ~180 MB |
 
@@ -115,23 +116,30 @@ echo. > "your_comfyui\custom_nodes\sycl-preloader\__init__.py"
 
 ```python
 import os
-import ctypes
 import importlib.util
+from pathlib import Path
 
-if os.name == "nt":
+def sycl_preloader():
+    if os.name != "nt":
+        return
     try:
         _spec = importlib.util.find_spec('llama_cpp')
-        _llama_dir = os.path.dirname(_spec.origin) if _spec else None
-        if _llama_dir and os.path.exists(_llama_dir):
-            os.add_dll_directory(_llama_dir)
-            for _dll in ['ggml-base.dll', 'dnnl.dll', 'sycl8.dll',
-                         'mkl_sycl_blas.5.dll', 'ggml-sycl.dll']:
-                _dll_path = os.path.join(_llama_dir, _dll)
-                if os.path.exists(_dll_path):
-                    ctypes.CDLL(_dll_path)
-                    print(f"[SYCL] OK {_dll}")
+        if not _spec:
+            print("[SYCL] 找不到 llama_cpp 包")
+            return
+        _pkg_dir = Path(_spec.origin).parent
+        for _sub in ['', 'lib', 'bin']:
+            _d = _pkg_dir / _sub if _sub else _pkg_dir
+            if _d.exists():
+                os.add_dll_directory(str(_d))
+        for _p in os.environ.get("PATH", "").split(os.pathsep):
+            if "Intel" in _p and os.path.exists(_p):
+                os.add_dll_directory(_p)
+        print("[SYCL] DLL搜索路径注册完成")
     except Exception as e:
         print(f"[SYCL] Error: {e}")
+
+sycl_preloader()
 ```
 
 #### Why prestartup_script.py?
