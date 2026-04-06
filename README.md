@@ -1,4 +1,4 @@
-[English](README.md) | [📖 中文文档点这里](README_zh.md)
+[中文](README.md) | [📖 英文文档点这里](README_EN.md)
 
 # llama-cpp-python-sycl-windows
 
