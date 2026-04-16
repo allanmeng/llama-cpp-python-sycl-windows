@@ -4,7 +4,7 @@
 
 为 Windows 平台预编译的 [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) 安装包，支持 **Intel Arc GPU (SYCL)** 加速。
 
-基于 [JamePeng 的 SYCL 分支](https://github.com/JamePeng/llama-cpp-python) 编译，为 Intel Arc GPU 提供 SYCL 加速支持。
+基于 [JamePeng 的分支](https://github.com/JamePeng/llama-cpp-python) 编译，为 Intel Arc GPU 提供 SYCL 加速支持。
 
 手工安装/升级whl的步骤扫盲包 https://www.yuque.com/allan-gmwqz/xq0z39/ckgeuiklqkazz75k?singleDoc#
 
