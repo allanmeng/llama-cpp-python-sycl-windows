@@ -3,7 +3,7 @@
 ## [0.3.36+sycl] - 2026-04-17
 
 ### Changed from JamePeng
-
+ Gemma-4 全模态和工具调用功能改进，支持 Qwen3.6 / Step3-VL，编译工作流程优化
   #### feat: 增强 Qwen35ChatHandler，支持 preserve_thinking 并兼容 Qwen3.6
   - 新增 `preserve_thinking` 参数，可选择性地在历史对话中保留 `<think>` 推理块（默认 `False` 以节省 Token）。
   - 在 Jinja 模板中为 `enable_thinking` 添加 `is defined` 安全检查。
