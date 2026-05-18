@@ -65,7 +65,7 @@ Changed from JamePeng
 ### Changed
 - Upgraded to llama-cpp-python 0.3.39
 - Removed bundled oneAPI runtime DLLs from whl (`dnnl.dll`, `mkl_core.2.dll`, `mkl_sycl_blas.5.dll`, `mkl_tbb_thread.2.dll`, `tbb12.dll`)
-- WHL size reduced from ~130MB+ to ~21MB
+- WHL size reduced from ~130MB+ to ~23MB
 - oneAPI runtime DLLs are now expected to be provided by the user's local oneAPI installation via `setvars.bat`
 
 ### Notes
