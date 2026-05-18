@@ -1,5 +1,84 @@
 # Changelog
 
+## [0.3.39+sycl] - 2026-05-18
+Changed from JamePeng
+### 主要新特性
+#### 动态 GGML 后端支持
+- 引入 `GGML_BACKEND_DL` 和 `GGML_CPU_ALL_VARIANTS`，替代旧的 CPU/AVX 标签矩阵
+- Windows/Linux 的 wheel 包现在包含可动态加载的后端 DLL 和 CPU 变体后端
+- **Windows 用户建议**：使用 LLVM/Clang 工具链以完整支持所有 x64 CPU 变体（MSVC 可能缺少 zen4、cooperlake、sapphirerapids 等变体）
+
+#### 新增模型支持
+
+**Qwen3-ASR**
+- 新增 `Qwen3ASRChatHandler`，支持音频 URL/Base64 输入
+- 集成 MTMD 多模态逻辑，自动将音频数据注入到 `<|audio_start|><|audio_pad|>[DATA]<|audio_end|>` 序列
+- 提供默认的多语言转录系统提示和模型特定停止令牌
+- ⚠️ **重要提示**：必须使用 BF16 量化保护多模态投影仪（mmproj）以防止音频质量下降
+
+**MiniCPM-V-4.6**
+- 新增 `MiniCPMV46ChatHandler` 支持
+
+#### 设备端混合检查点
+- 新增 `HybridCheckpointCache`，支持双模式：
+  - **主机模式**（默认）：保留完整的 Python 回滚历史
+  - **设备模式**：利用 `LLAMA_STATE_SEQ_FLAGS_ON_DEVICE` 将张量保留在 VRAM 中，减少主机-设备复制开销
+- 在 `Llama.__init__` 中暴露 `checkpoint_on_device` 参数
+- 默认检查点数从 32 调整为 16
+- 添加安全防护机制，防止过时设备端检查点恢复，并强制每个 `seq_id` 只有一个活动设备检查点
+
+### 重要改进与变更
+
+#### 精细日志系统
+- **6 级粒度控制**（0-5 级）：替代原有的二进制 `verbose` 标志，对齐上游 llama.cpp 日志规范
+  - 0: output | 1: error | 2: warn | 3: info | 4: trace | 5: debug
+- **动态过滤系统**：支持自定义子串过滤，可主动抑制特定的 C++ 日志输出
+- **新增 API**：
+  - `Llama.__init__` 参数：`verbosity`, `log_filters`, `log_filters_case_sensitive`
+  - 实例方法：`set_verbosity()`, `get_verbosity()`, `set_log_filters()`, `add_log_filters()`, `clear_log_filters()`
+- 保持向后兼容：原有的 `set_verbose(bool)` 函数仍可用
+- 日志路由：`GGML_LOG_LEVEL_NONE` 输出到 stdout，其他诊断日志输出到 stderr
+
+#### 构建与包结构优化
+- **重构 CMake 目标列表**：分类为逻辑组（`LLAMA_CPP_TARGETS`、`GGML_CORE_TARGETS`、`GGML_CPU_VARIANT_TARGETS`、`GGML_BACKEND_TARGETS`）
+- **精简 wheel 包**：显式禁用示例、测试、工具、服务器、嵌入式 UI 及 curl 等非必要目标
+- **清理机制**：添加清理函数，移除 wheel 运行时目录中的 cmake、pkgconfig 和导入库
+- **版本标识**：移除 `.basic` 本地版本后缀，wheel 发布为 `+cu131`
+
+#### CUDA 更新
+- CUDA 架构更新至 **13.1**
+- 支持的计算能力范围：SM70 至 SM120a
+
+### 问题修复
+
+- **MTMD 聊天处理器**：
+  - 修复 `audio_url` 内容类型检查逻辑错误（`content == "audio_url"` → `content_type == "audio_url"`）
+  - 改进变量处理，提取 `audio_url` 变量提高可读性
+  - 优化控制流，将 `else` 改为 `elif content_type == "input_audio"`
+
+- **内部实现**：
+  - 移除 `_internals` 中不必要的模型释放操作（模型不应在上下文中被释放）
+
+- **设备端检查点**：
+  - 重命名内部 `_flag_partial` 为 `_flags` 以支持多状态标志
+
+### Changed
+- Upgraded to llama-cpp-python 0.3.39
+- Removed bundled oneAPI runtime DLLs from whl (`dnnl.dll`, `mkl_core.2.dll`, `mkl_sycl_blas.5.dll`, `mkl_tbb_thread.2.dll`, `tbb12.dll`)
+- WHL size reduced from ~130MB+ to ~21MB
+- oneAPI runtime DLLs are now expected to be provided by the user's local oneAPI installation via `setvars.bat`
+
+### Notes
+- oneAPI upgrades no longer require repackaging the whl
+- Installation now requires Intel oneAPI runtime to be installed on the target machine
+
+### Environment
+- Python 3.13.11
+- Intel oneAPI 2025.3.2
+- Intel Arc B580 (Battlemage) verified
+
+---
+
 ## [0.3.36+sycl] - 2026-04-17
 
 ### Changed from JamePeng
