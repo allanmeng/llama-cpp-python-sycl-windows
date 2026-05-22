@@ -1,71 +1,36 @@
 # Changelog
 
-## [0.3.39+sycl] - 2026-05-18
+## [0.3.38+sycl] 优化 CJK 解码回绕、同步语法解析器，并修复 CUDA Graph 日志 - 2026-05-01
 Changed from JamePeng
+
 ### 主要新特性
-#### 动态 GGML 后端支持
-- 引入 `GGML_BACKEND_DL` 和 `GGML_CPU_ALL_VARIANTS`，替代旧的 CPU/AVX 标签矩阵
-- Windows/Linux 的 wheel 包现在包含可动态加载的后端 DLL 和 CPU 变体后端
-- **Windows 用户建议**：使用 LLVM/Clang 工具链以完整支持所有 x64 CPU 变体（MSVC 可能缺少 zen4、cooperlake、sapphirerapids 等变体）
+#### 性能优化：针对 CJK 高频输出的解码缓冲区大小优化
 
-#### 新增模型支持
+- 将初始的解码回绕（detokenize）缓冲区估算值从原来的“token 数 x1”增大为“token 数 x5 + 32 字节”。性能分析显示，CJK 高频输出场景中每个 token 往往需要约 4.0 至 5.04 字节，处理极小 token 的边缘情况甚至需要约 6.0 字节。旧的估算值经常导致 llama_detokenize 调用失败，进而需要重新调整缓冲区大小并重试，这使得 llama_detokenize 的调用次数几乎翻倍。
+- 本次优化减少了不必要的解码重试，降低了 CJK 场景下的调用开销，实测推理性能提升了约 3%–5%。
 
-**Qwen3-ASR**
-- 新增 `Qwen3ASRChatHandler`，支持音频 URL/Base64 输入
-- 集成 MTMD 多模态逻辑，自动将音频数据注入到 `<|audio_start|><|audio_pad|>[DATA]<|audio_end|>` 序列
-- 提供默认的多语言转录系统提示和模型特定停止令牌
-- ⚠️ **重要提示**：必须使用 BF16 量化保护多模态投影仪（mmproj）以防止音频质量下降
+#### 补丁（日志）：过滤掉冗长且杂乱的 CUDA Graph 调试日志
 
-**MiniCPM-V-4.6**
-- 新增 `MiniCPMV46ChatHandler` 支持
+- 在 ggml_log_callback 中添加了临时补丁，用于抑制底层 C++ 后端生成的、类似 CUDA Graph id %zu reused 这类嘈杂日志。未来计划对日志系统进行全面重构，以实现更好的日志控制。
 
-#### 设备端混合检查点
-- 新增 `HybridCheckpointCache`，支持双模式：
-  - **主机模式**（默认）：保留完整的 Python 回滚历史
-  - **设备模式**：利用 `LLAMA_STATE_SEQ_FLAGS_ON_DEVICE` 将张量保留在 VRAM 中，减少主机-设备复制开销
-- 在 `Llama.__init__` 中暴露 `checkpoint_on_device` 参数
-- 默认检查点数从 32 调整为 16
-- 添加安全防护机制，防止过时设备端检查点恢复，并强制每个 `seq_id` 只有一个活动设备检查点
+#### 功能（语法）：与上游同步更新 JSON Schema 到 GBNF 转换器
 
-### 重要改进与变更
+- 允许 LlamaGrammar.from_json_schema 和 json_schema_to_gbnf 同时接受字符串和字典格式的 schema 输入。
 
-#### 精细日志系统
-- **6 级粒度控制**（0-5 级）：替代原有的二进制 `verbose` 标志，对齐上游 llama.cpp 日志规范
-  - 0: output | 1: error | 2: warn | 3: info | 4: trace | 5: debug
-- **动态过滤系统**：支持自定义子串过滤，可主动抑制特定的 C++ 日志输出
-- **新增 API**：
-  - `Llama.__init__` 参数：`verbosity`, `log_filters`, `log_filters_case_sensitive`
-  - 实例方法：`set_verbosity()`, `get_verbosity()`, `set_log_filters()`, `add_log_filters()`, `clear_log_filters()`
-- 保持向后兼容：原有的 `set_verbose(bool)` 函数仍可用
-- 日志路由：`GGML_LOG_LEVEL_NONE` 输出到 stdout，其他诊断日志输出到 stderr
+- 将 allow_fetch、dotall 和 raw_pattern 参数暴露给公共 API，与上游脚本保持一致。
 
-#### 构建与包结构优化
-- **重构 CMake 目标列表**：分类为逻辑组（`LLAMA_CPP_TARGETS`、`GGML_CORE_TARGETS`、`GGML_CPU_VARIANT_TARGETS`、`GGML_BACKEND_TARGETS`）
-- **精简 wheel 包**：显式禁用示例、测试、工具、服务器、嵌入式 UI 及 curl 等非必要目标
-- **清理机制**：添加清理函数，移除 wheel 运行时目录中的 cmake、pkgconfig 和导入库
-- **版本标识**：移除 `.basic` 本地版本后缀，wheel 发布为 `+cu131`
+- 修复了处理空/无约束 schema 对象（例如 {"description": "..."}）时缺失的逻辑，现在此类情况会正确默认为接受任意值。
 
-#### CUDA 更新
-- CUDA 架构更新至 **13.1**
-- 支持的计算能力范围：SM70 至 SM120a
+- 修复了当变量为零时 has_min 和 has_max 计算错误的问题。将 != None 替换为 is not None 以生成最小/最大整数。
 
-### 问题修复
+- 更新了内部常量与正则表达式（INVALID_RULE_CHARS_RE、GRAMMAR_LITERAL_ESCAPE_RE、GRAMMAR_RANGE_LITERAL_ESCAPE_RE），解决了字符转义问题。
 
-- **MTMD 聊天处理器**：
-  - 修复 `audio_url` 内容类型检查逻辑错误（`content == "audio_url"` → `content_type == "audio_url"`）
-  - 改进变量处理，提取 `audio_url` 变量提高可读性
-  - 优化控制流，将 `else` 改为 `elif content_type == "input_audio"`
-
-- **内部实现**：
-  - 移除 `_internals` 中不必要的模型释放操作（模型不应在上下文中被释放）
-
-- **设备端检查点**：
-  - 重命名内部 `_flag_partial` 为 `_flags` 以支持多状态标志
+- 更新了参考链接，指向新的 ggml-org 组织。
 
 ### Changed
-- Upgraded to llama-cpp-python 0.3.39
+- Upgraded to llama-cpp-python 0.3.38
 - Removed bundled oneAPI runtime DLLs from whl (`dnnl.dll`, `mkl_core.2.dll`, `mkl_sycl_blas.5.dll`, `mkl_tbb_thread.2.dll`, `tbb12.dll`)
-- WHL size reduced from ~130MB+ to ~23MB
+- WHL size reduced from ~130MB+ to ~22MB
 - oneAPI runtime DLLs are now expected to be provided by the user's local oneAPI installation via `setvars.bat`
 
 ### Notes
