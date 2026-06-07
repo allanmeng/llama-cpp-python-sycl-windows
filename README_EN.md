@@ -9,6 +9,26 @@ Pre-built [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) wheels
 Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) which adds SYCL support for Intel Arc GPUs.
 
 ---
+## ⚠ Important Compatibility Warning
+
+> **[June 2026] Multimodal / Vision-Language Models (such as Qwen-VL used for image-to-prompt tagging) are currently suffering from critical memory crashes (Access Violation) in recent releases.**
+> 
+> Due to underlying structural updates in `llama.cpp` (specifically the introduction of the minimum 1024 image tokens restriction and mrope positional encoding refactoring), the latest versions trigger a driver-level memory conflict when running on Windows with Intel SYCL (XPU), leading to a `Windows fatal exception: access violation` crash.
+
+To prevent sudden crashes, **it is highly recommended to stay on version `0.3.38` if your workflow heavily relies on Qwen-VL or multimodal vision tagging nodes.**
+
+### 📊 Multimodal Models (VL / Image Tagging) Verification Matrix
+
+
+| Wheel Version | Acceleration Backend | Text Generation (Chat) | Qwen-VL / Vision Tasks | Note |
+| :--- | :--- | :---: | :---: | :--- |
+| **0.3.38** | **SYCL (GPU)** | 🟢 OK | **🟢 OK (Recommended)** | **The most stable version for multimodal tasks with GPU acceleration.** |
+| **0.3.39** | **SYCL (GPU)** | 🟢 OK | **❌ Crash (Fatal)** | Throws `Access Violation` error during image decoding. |
+| 0.3.39 | CPU Mode | 🟢 OK | 🟢 OK | Requires setting `n_gpu_layers=0` in nodes, runs slower. |
+| **0.3.40** | **SYCL (GPU)** | 🟢 OK | **❌ Crash (Fatal)** | Same as above. The XPU bug remains unresolved in upstream `llama.cpp`. |
+| 0.3.40 | CPU Mode | 🟢 OK | 🟢 OK | Requires setting `n_gpu_layers=0` in nodes, runs slower. |
+
+---
 
 ## ⚠️ Prerequisites
 
