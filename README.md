@@ -1,4 +1,4 @@
-[中文](README.md) | [📖 英文文档点这里](README_EN.md)
+[中文](README.md) | [English](README_EN.md)
 
 # llama-cpp-python-sycl-windows
 
@@ -6,42 +6,76 @@
 
 基于 [JamePeng 的分支](https://github.com/JamePeng/llama-cpp-python) 编译，为 Intel Arc GPU 提供 SYCL 加速支持。
 
-手工安装/升级whl的步骤扫盲包 https://www.yuque.com/allan-gmwqz/xq0z39/ckgeuiklqkazz75k?singleDoc#
+手工安装/升级whl的步骤扫盲包 [https://www.yuque.com/allan-gmwqz/xq0z39/ckgeuiklqkazz75k?singleDoc#](https://www.yuque.com/allan-gmwqz/xq0z39/ckgeuiklqkazz75k?singleDoc)
 
 ---
 
-## ⚠ 重要兼容性警告 (Compatibility Warning)
+## 0.3.39+ 重要变更说明
 
-> **[2026/06] 近期发现多模态模型（如 Qwen-VL 等提示词反推/大视觉模型）在新版本上存在内存越界崩溃（Access Violation）问题。**
-> 
-> 底层 `llama.cpp` 在核心升级（引入多模态模型最小 1024 图像 Token 限制及位置编码 mrope 优化）后，导致新版本在 Windows + Intel SYCL (XPU) 环境下运行时出现驱动级别的内存读写冲突，引发 `Windows fatal exception: access violation` 报错。
+### 1. llama-cpp-python-sycl-windows 在 0.3.39 之后发生了哪些变化
 
-为了避免闪退，如果你需要频繁使用 **Qwen-VL / 多模态视觉反推** 节点，**强烈建议目前锁死在 `0.3.38` 版本。**
+从 0.3.39 版本开始，llama-cpp-python 引入了重大的 **MTMD（Multi-Modal Token Decomposition）重写**，对视觉模型的支持方式做了底层重构：
 
-### 📊 多模态模型（VL / 提示词反推）版本验证矩阵
+| 变更项 | 0.3.38 及之前 | 0.3.39+ |
+|--------|-------------|---------|
+| 视觉模型加载方式 | 手动创建 `clip_model_path` handler 注入 `Llama()` | `mmproj_path` 直接传给 `Lama()`，内部自动创建 handler |
+| 视觉 handler 类 | 模型特定 handler（如 `Qwen3VLChatHandler`） | `GenericMTMDChatHandler` 统一处理 |
+| handler 参数传递 | 直接传给 handler 构造函数 | 通过 `chat_handler_kwargs` dict 传递 |
+| 混合架构模型 | 无特殊处理 | 需设置 `ctx_checkpoints=0`（如 Qwen3.5） |
 
+### 2. 从 0.3.38 或更早版本升级的用户需要手工清理哪些内容
 
-| 安装包版本 (Version) | 加速后端 (Backend) | 纯文本/普通聊天 (Text Gen) | Qwen-VL / 多模态反推 (Vision Task) | 备注 (Note) |
-| :--- | :--- | :---: | :---: | :--- |
-| **0.3.38** | **SYCL (GPU)** | 🟢 正常 | **🟢 正常 (推荐)** | **目前多模态加速最稳定的版本，建议留守** |
-| **0.3.39** | **SYCL (GPU)** | 🟢 正常 | **❌ 崩溃 (闪退)** | 运行多模态会报 `Access Violation` 错误 |
-| 0.3.39 | CPU 模式 | 🟢 正常 | 🟢 正常 | 需在节点中设置 `n_gpu_layers=0`，速度较慢 |
-| **0.3.40** | **SYCL (GPU)** | 🟢 正常 | **❌ 崩溃 (闪退)** | 同上，底层 `llama.cpp` 尚未修复此 XPU 冲突 |
-| 0.3.40 | CPU 模式 | 🟢 正常 | 🟢 正常 | 需在节点中设置 `n_gpu_layers=0`，速度较慢 |
+> **重要**：不要直接使用 `pip install --upgrade`，旧版本残留文件可能与新版冲突。请按以下步骤操作：
+
+#### 步骤 1：完全卸载旧版本
+
+```bat
+pip uninstall llama-cpp-python -y
+```
+
+#### 步骤 2：安装新版本 whl
+
+```bat
+pip install llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl
+```
+
+#### 步骤 3：更新 ComfyUI 插件
+
+如果你在 ComfyUI 中使用此 whl，必须使用适配 0.3.39+ 的插件版本（见下方第 3 节）。
+
+### 3. 对应适配的 ComfyUI 插件
+
+原版 `comfyui-sg-llama-cpp` 插件不支持 0.3.39+ 的 MTMD 重写。以下 fork 已完成适配：
+
+**https://github.com/allanmeng/comfyui-sg-llama-cpp**
+
+适配内容：
+- **`clip_model_path` → `mmproj_path`**：直接传给 `Llama()`，不再手动创建 handler
+- **`GenericMTMDChatHandler` 参数过滤**：取 `GenericMTMDChatHandler` ∪ `MTMDChatHandler` 参数并集，过滤掉 `force_reasoning`、`enable_thinking` 等 0.3.39+ 不接受的参数
+- **新增 `ctx_checkpoints` 选项**（默认 `0`）：混合架构模型（Qwen3.5 等 Transformer+Mamba）必须设置
+- **`vision_image_min_tokens` 默认值**从 `-1` 改为 `1024`（Qwen-VL 最低要求）
+- **移除无效 UI 参数**：`vision_enable_thinking`、`vision_force_reasoning`、`vision_add_vision_id`
+
+安装方式：
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
+```
 
 ---
 
-
-## ⚠️ 前置要求
+## 前置要求
 
 安装前，请确保已完成以下步骤：
 
 ### 1. Intel Arc 显卡驱动
+
 从以下地址下载并安装最新的 Intel Arc 显卡驱动：
-👉 https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html
+https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html
 
 ### 2. Intel oneAPI Base Toolkit（必须安装）
-SYCL 运行时依赖 Intel oneAPI，但**无需安装完整工具包**，只需安装以下组件：
+
+SYCL 运行时依赖 Intel oneAPI，但 **无需安装完整工具包**，只需安装以下组件：
 
 | 组件 | 用途 |
 |------|------|
@@ -51,7 +85,7 @@ SYCL 运行时依赖 Intel oneAPI，但**无需安装完整工具包**，只需�
 | Intel oneAPI Threading Building Blocks (oneTBB) | 提供 `tbb12.dll` |
 
 下载 Intel oneAPI Base Toolkit（安装时选择自定义安装）：
-👉 https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html
+https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html
 
 > **提示：** 安装时选择「自定义安装」，只勾选上表中的 4 个组件，可节省大量磁盘空间。
 
@@ -64,7 +98,7 @@ SYCL 运行时依赖 Intel oneAPI，但**无需安装完整工具包**，只需�
 | 操作系统 | Windows 10/11 x64 |
 | 显卡 | Intel Arc（炼金师 / 战法师架构） |
 | 驱动 | Intel Arc 显卡驱动（最新版） |
-| oneAPI | ✅ 必须安装 — DPC++ Compiler、oneMKL、oneDNN、oneTBB |
+| oneAPI | 必须安装 — DPC++ Compiler、oneMKL、oneDNN、oneTBB |
 
 ---
 
@@ -72,6 +106,7 @@ SYCL 运行时依赖 Intel oneAPI，但**无需安装完整工具包**，只需�
 
 | 版本 | 文件 | 大小 |
 |------|------|------|
+| 0.3.41 | `llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl` | ~14 MB |  因为打包的时候已经清理了bin/
 | 0.3.38 | `llama_cpp_python-0.3.38+sycl-cp313-cp313-win_amd64.whl` | ~22 MB |
 | 0.3.36 | `llama_cpp_python-0.3.36+sycl-cp313-cp313-win_amd64.whl` | ~20 MB |
 | 0.3.35 | `llama_cpp_python-0.3.35+sycl-cp313-cp313-win_amd64.whl` | ~19 MB |
@@ -81,7 +116,7 @@ SYCL 运行时依赖 Intel oneAPI，但**无需安装完整工具包**，只需�
 | 0.3.31 | `llama_cpp_python-0.3.31+sycl-cp313-cp313-win_amd64.whl` | ~174 MB |
 | 0.3.30 | `llama_cpp_python-0.3.30+sycl-cp313-cp313-win_amd64.whl` | ~180 MB |
 
-从 [Releases](../../releases) 页面下载。
+从 [Releases](https://github.com/allanmeng/llama-cpp-python-sycl-windows/releases) 页面下载。
 
 ---
 
@@ -91,18 +126,18 @@ SYCL 运行时依赖 Intel oneAPI，但**无需安装完整工具包**，只需�
 
 ```bat
 pip uninstall llama-cpp-python -y
-pip install llama_cpp_python-0.3.32+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl
 ```
-先 uninstall 再 install 是最干净的，不需要手动删目录
+
+先 uninstall 再 install 是最干净的安装方式。
 
 ### 方法二：手动安装（适用于 ComfyUI 等嵌入式 Python 环境）
 
 1. 将 whl 文件重命名为 `.zip` 后解压
 2. 将 `llama_cpp` 文件夹复制到 `site-packages` 目录：
-
-```
-your_python\Lib\site-packages\llama_cpp\
-```
+   ```
+   your_python\Lib\site-packages\llama_cpp\
+   ```
 
 ---
 
@@ -110,13 +145,14 @@ your_python\Lib\site-packages\llama_cpp\
 
 ### 在启动脚本中加载 oneAPI 环境
 
-安装完 oneAPI 后，在 ComfyUI 的启动 `.bat` 文件里，**Python 启动之前**加入以下一行：
+安装完 oneAPI 后，在 ComfyUI 的启动 `.bat` 文件里， **Python 启动之前** 加入以下一行：
 
 ```bat
 call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
 ```
 
 启动脚本示例 `start_comfyui.bat`：
+
 ```bat
 @echo off
 call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
@@ -124,9 +160,11 @@ call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
 ......
 "C:\python\python.exe" main.py --listen 0.0.0.0
 ```
------
+
+---
 
 ### 创建专用的预加载插件
+
 为所有基于 llama-cpp-python 的 ComfyUI 节点启用 SYCL GPU 加速，需要创建一个专用的预加载插件。
 
 #### 第一步：创建插件目录
@@ -184,13 +222,14 @@ sycl_preloader()
 ##### 为什么 bat 启动文件和 main.py 都不行？
 
 - **启动 `.bat` 文件**：可以设置 `PATH` 和环境变量，但无法调用 Python 的 `os.add_dll_directory()`，DLL 加载限制依然存在。
-- **ComfyUI 的 `main.py`**：看起来是个选项，但 `main.py` 第一行就开始导入 ComfyUI 核心模块（`import comfy.options` 等），这些 import 会间接触发插件加载链，导致 `llama_cpp` 可能在预加载代码执行之前就已经被导入了。时机太晚，不可靠。
+- **ComfyUI 的 `main.py`**：看起来是个选项，但 `main.py` 第一行就开始导入 ComfyUI 核心模块（ `import comfy.options` 等），这些 import 会间接触发插件加载链，导致 `llama_cpp` 可能在预加载代码执行之前就已经被导入了。时机太晚，不可靠。
 
 ##### 解决方案：利用 ComfyUI 的 prestartup 机制
 
-ComfyUI 内置了一个钩子函数 `execute_prestartup_script()`。启动时，ComfyUI 会扫描 `custom_nodes\` 下每一个子文件夹，找到并执行其中名为 `prestartup_script.py` 的文件。这个过程发生在**所有插件节点被导入之前**，是整个 ComfyUI 进程中最早能可靠运行 Python 代码的时机。
+ComfyUI 内置了一个钩子函数 `execute_prestartup_script()`。启动时，ComfyUI 会扫描 `custom_nodes\` 下每一个子文件夹，找到并执行其中名为 `prestartup_script.py` 的文件。这个过程发生在 **所有插件节点被导入之前**，是整个 ComfyUI 进程中最早能可靠运行 Python 代码的时机。
 
 启动顺序如下：
+
 ```
 main.py 基础初始化
     ↓
@@ -201,7 +240,7 @@ execute_prestartup_script()  ← prestartup_script.py 在这里执行
 启动服务器
 ```
 
-通过 `os.add_dll_directory()` 和 `ctypes.CDLL()` 加载 SYCL DLL 之后，效果是**进程级别**的。后续所有基于 llama-cpp-python 的插件（ComfyUI-QwenVL、comfyui-sg-llama-cpp 等）都能自动找到已经在内存中的 DLL，无需每个插件单独配置。
+通过 `os.add_dll_directory()` 和 `ctypes.CDLL()` 加载 SYCL DLL 之后，效果是 **进程级别** 的。后续所有基于 llama-cpp-python 的插件（ComfyUI-QwenVL、comfyui-sg-llama-cpp 等）都能自动找到已经在内存中的 DLL，无需每个插件单独配置。
 
 ##### 为什么要建一个专用的插件文件夹？
 
@@ -225,8 +264,9 @@ custom_nodes\sycl-preloader\
 | `n_ctx` | `4096` |
 | `n_threads` | `4` |
 | `n_threads_batch` | `4` |
-| `vision_image_min_tokens` | `-1` |
-| `vision_image_max_tokens` | `-1` |
+| `ctx_checkpoints` | `0`（禁用；混合架构模型如 Qwen3.5 必须设置） |
+| `vision_image_min_tokens` | `1024`（Qwen-VL 最低要求） |
+| `vision_image_max_tokens` | `-1`（使用默认值） |
 
 ---
 
