@@ -79,11 +79,11 @@
 ### Changed
 
 - Upgraded to llama-cpp-python 0.3.41
-- Removed `bin/` directory from whl package during post-compile cleanup
-  - `bin/` 目录由 llama.cpp 构建系统自动生成，仅包含 7 个核心 DLL（`lib/` 目录 14 个 DLL 的子集）
-  - `llama_cpp` 的 `load_shared_library` 会将 `[lib/, bin/]` 依次 prepend 到 PATH，导致 `find_library` 优先命中 `bin/` 下的 DLL
-  - 7 个核心 DLL 从 `bin/` 加载，5 个 oneAPI DLL 从 `lib/` 加载，Windows DLL loader 对不同路径的同名模块视为不同实例，引发 SYCL 运行时初始化冲突（access violation 崩溃）
-  - 打包前删除 `bin/` 后，所有 DLL 统一从 `lib/` 加载，问题消除
+- `bin/` directory DLL loading order fixed upstream by JamePeng (commit `516ec3f`)
+  - `load_shared_library` now uses `reversed(base_paths)` to ensure `lib/` is prepended to PATH before `bin/`
+  - All DLLs now load uniformly from `lib/`, eliminating the SYCL runtime initialization conflict (access violation)
+  - No post-compile `bin/` deletion required — the whl can include `bin/` without issues
+  - New diagnostic logging: `[llama-cpp-python].find_library: loaded library from ...` prints the actual load path
 - Continued to remove bundled oneAPI runtime DLLs from whl (`dnnl.dll`, `mkl_core.2.dll`, `mkl_sycl_blas.5.dll`, `mkl_tbb_thread.2.dll`, `tbb12.dll`)
 - WHL size ~22 MB
 
@@ -130,6 +130,7 @@ If you use `comfyui-sg-llama-cpp`, switch to the adapted fork:
 cd ComfyUI/custom_nodes
 git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
 ```
+
 
 ---
 
