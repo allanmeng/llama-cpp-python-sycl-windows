@@ -1,4 +1,137 @@
 # Changelog
+## [0.3.41+sycl] - 2026-07-11
+
+### Changed from JamePeng
+
+升级至 llama-cpp-python 0.3.41，包含 0.3.39 引入的 MTMD 重写及 0.3.41 的多项新特性。
+
+---
+
+#### 模板驱动的 MTMD（Template-Driven MTMD）
+
+为 MTMD chat handler 新增 `extra_template_arguments` 参数，传递到 Jinja chat template 渲染调用中。这使得通用模型模板可以接收运行时选项，如 `enable_thinking`、`add_vision_id` 等模型特定的 Jinja 变量。
+
+将 MTMD prompt 渲染逻辑拆分为独立 helper：
+
+- `_render_mtmd_prompt()`：纯 chat template 渲染
+- `_replace_media_placeholders()`：将渲染后的 media tag 规范化为 MTMD runtime marker
+- `_render_and_replace_media()`：组合渲染与规范化
+
+将 `mtmd_tokenize` 拆分为独立的 `_mtmd_tokenize()` helper，将混合 tokenization 逻辑与 `_process_mtmd_prompt` 解耦，改善 prompt 构建与 C++ binding 之间的关注点分离。
+
+---
+
+#### 更广泛的多模态输入（Broader Multimodal Inputs）
+
+扩展 MTMD media extraction，支持模型 chat template 中常见的多种多模态内容格式。除了 OpenAI 风格的 `image_url`/`audio_url`/`video_url` chunk 之外，现在还接受 `image`/`audio`/`video` 类型的 chunk 以及直接的 media key，如 `{"image": "..."}`、`{"audio": "..."}`、`{"video": "..."}`。
+
+新增 `video_url` 输入支持：`MTMDChatHandler` 现在可以处理视频输入。会检测加载的 libmtmd 是否支持 video helper，在不支持时提前拒绝视频输入。
+
+---
+
+#### GenericMTMDChatHandler 增强
+
+增强 `GenericMTMDChatHandler` 对模型自带 chat template 的支持：
+
+- 接受可选的命名 chat template
+- 通过 `llama_model_chat_template()` 在调用时从模型加载
+- 回退到模型默认 chat template
+- 最终使用内置 `MTMD CHAT_FORMAT` 作为兜底
+
+扩展通用 media placeholder 列表以适配常见多模态模板。
+
+---
+
+#### 更智能的 N-Gram 投机解码（Smarter N-Gram Drafting）
+
+改进投机解码的 n-gram draft 选择和 accept 反馈机制：
+
+- 按 key/value 存储已接受的 draft 长度，并相应截断未来的 draft
+- key-only 模式下在任何 key 匹配时即进行 draft，不再要求 `min_hits`
+- k4v continuation 按频率选择而非最近出现
+- 当 top continuation 不占主导时跳过有歧义的 k4v draft
+- 跟踪固定大小的 k4v continuation 以保持频率统计的可比性
+
+---
+
+#### 模块重构：多模态 handler 迁移至 llama_multimodal
+
+将 `MTMDChatHandler`、`GenericMTMDChatHandler` 及模型特定的多模态 chat handler 从 `llama_chat_format.py` 迁移至独立的 `llama_multimodal.py` 模块。
+
+`llama_chat_format.py` 随着多模态支持扩展已变得过于庞大。拆分后 chat formatting 层更精简，media loading、MTMD tokenization、KV-cache 管理和 handler 实现集中在专用模块中。
+
+保留 `llama_chat_format.py` 的向后兼容 re-export，现有 import 不受影响。
+
+将 `clip_model_path` 保留为 `mmproj_path` 的废弃初始化别名。
+
+---
+
+#### 其他改进
+
+- llama.cpp 同步至 `ggml-org/llama.cpp` commit [`3899b39`](https://github.com/ggml-org/llama.cpp/commit/3899b39ce2acc2e019f149b7107f24b6ca297390)
+- 改进 Windows LLVM OpenMP 运行时 `libomp140.x86_64.dll` 的发现逻辑，优先使用 VS 2022 VC143 OpenMP redist
+- `load_shared_library` 失败时的错误信息现在包含搜索目录的内容列表，便于诊断缺失或错误命名的库文件
+- `LlamaModel.model_chat_template()` 返回 `Optional[str]`，正确处理模型无 chat template 的情况
+- 新增 `MTMDChatHandler` chunk type helper（`_is_text_chunk`/`_is_image_chunk`/`_is_audio_chunk`）
+
+---
+
+### Changed
+
+- Upgraded to llama-cpp-python 0.3.41
+- Removed `bin/` directory from whl package during post-compile cleanup
+  - `bin/` 目录由 llama.cpp 构建系统自动生成，仅包含 7 个核心 DLL（`lib/` 目录 14 个 DLL 的子集）
+  - `llama_cpp` 的 `load_shared_library` 会将 `[lib/, bin/]` 依次 prepend 到 PATH，导致 `find_library` 优先命中 `bin/` 下的 DLL
+  - 7 个核心 DLL 从 `bin/` 加载，5 个 oneAPI DLL 从 `lib/` 加载，Windows DLL loader 对不同路径的同名模块视为不同实例，引发 SYCL 运行时初始化冲突（access violation 崩溃）
+  - 打包前删除 `bin/` 后，所有 DLL 统一从 `lib/` 加载，问题消除
+- Continued to remove bundled oneAPI runtime DLLs from whl (`dnnl.dll`, `mkl_core.2.dll`, `mkl_sycl_blas.5.dll`, `mkl_tbb_thread.2.dll`, `tbb12.dll`)
+- WHL size ~22 MB
+
+### Notes
+
+- This version includes MTMD rewrite (since 0.3.39), which breaks API compatibility with 0.3.38 and earlier for vision model usage
+- Key API changes from 0.3.39+:
+  - `clip_model_path` removed → use `mmproj_path` passed to `Llama()`
+  - Model-specific vision handlers deprecated → `GenericMTMDChatHandler` handles all vision models
+  - Handler parameters passed via `chat_handler_kwargs` dict
+  - Hybrid architecture models (e.g. Qwen3.5) require `ctx_checkpoints=0`
+- If you use vision models (Qwen-VL, etc.) in ComfyUI, you must use the adapted plugin: https://github.com/allanmeng/comfyui-sg-llama-cpp
+- Installation still requires Intel oneAPI runtime to be installed on the target machine
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2025.3.2 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+### Upgrade from 0.3.38 or earlier
+
+> **Do NOT use `pip install --upgrade` directly.** Residual files from the old version may conflict with the new one. Follow these steps:
+
+**Step 1: Uninstall the old version**
+
+```bat
+pip uninstall llama-cpp-python -y
+```
+
+**Step 2: Install the new version**
+
+```bat
+pip install llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl
+```
+
+**Step 3: Update your ComfyUI plugin to the adapted version**
+
+If you use `comfyui-sg-llama-cpp`, switch to the adapted fork:
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
+```
+
+---
 
 ## [0.3.38+sycl] 优化 CJK 解码回绕、同步语法解析器，并修复 CUDA Graph 日志 - 2026-05-01
 Changed from JamePeng
