@@ -1,6 +1,4 @@
-[English](README.md) | [📖 中文文档点这里](README_zh.md)
-
-
+[English](README_EN.md) | [中文](README.md)
 
 # llama-cpp-python-sycl-windows
 
@@ -9,36 +7,72 @@ Pre-built [llama-cpp-python](https://github.com/abetlen/llama-cpp-python) wheels
 Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) which adds SYCL support for Intel Arc GPUs.
 
 ---
-## ⚠ Important Compatibility Warning
 
-> **[June 2026] Multimodal / Vision-Language Models (such as Qwen-VL used for image-to-prompt tagging) are currently suffering from critical memory crashes (Access Violation) in recent releases.**
-> 
-> Due to underlying structural updates in `llama.cpp` (specifically the introduction of the minimum 1024 image tokens restriction and mrope positional encoding refactoring), the latest versions trigger a driver-level memory conflict when running on Windows with Intel SYCL (XPU), leading to a `Windows fatal exception: access violation` crash.
+## Important Changes in 0.3.39+
 
-To prevent sudden crashes, **it is highly recommended to stay on version `0.3.38` if your workflow heavily relies on Qwen-VL or multimodal vision tagging nodes.**
+### 1. What Changed in llama-cpp-python-sycl-windows After 0.3.39
 
-### 📊 Multimodal Models (VL / Image Tagging) Verification Matrix
+Starting from version 0.3.39, llama-cpp-python introduced a major **MTMD (Multi-Modal Token Decomposition) rewrite**, restructuring how vision models are supported:
 
+| Change | 0.3.38 and Earlier | 0.3.39+ |
+|--------|-------------------|---------|
+| Vision model loading | Manual `clip_model_path` handler injected into `Llama()` | `mmproj_path` passed directly to `Llama()`, handler created internally |
+| Vision handler class | Model-specific handlers (e.g. `Qwen3VLChatHandler`) | `GenericMTMDChatHandler` handles all vision models |
+| Handler parameter passing | Direct to handler constructor | Via `chat_handler_kwargs` dict |
+| Hybrid architecture models | No special handling | Requires `ctx_checkpoints=0` (e.g. Qwen3.5) |
 
-| Wheel Version | Acceleration Backend | Text Generation (Chat) | Qwen-VL / Vision Tasks | Note |
-| :--- | :--- | :---: | :---: | :--- |
-| **0.3.38** | **SYCL (GPU)** | 🟢 OK | **🟢 OK (Recommended)** | **The most stable version for multimodal tasks with GPU acceleration.** |
-| **0.3.39** | **SYCL (GPU)** | 🟢 OK | **❌ Crash (Fatal)** | Throws `Access Violation` error during image decoding. |
-| 0.3.39 | CPU Mode | 🟢 OK | 🟢 OK | Requires setting `n_gpu_layers=0` in nodes, runs slower. |
-| **0.3.40** | **SYCL (GPU)** | 🟢 OK | **❌ Crash (Fatal)** | Same as above. The XPU bug remains unresolved in upstream `llama.cpp`. |
-| 0.3.40 | CPU Mode | 🟢 OK | 🟢 OK | Requires setting `n_gpu_layers=0` in nodes, runs slower. |
+### 2. Manual Cleanup Required for Users Upgrading from Pre-0.3.39
+
+> **Important**: Do NOT use `pip install --upgrade` directly. Stale files from the old version may conflict with the new one. Follow these steps instead:
+
+#### Step 1: Completely Uninstall the Old Version
+
+```bat
+pip uninstall llama-cpp-python -y
+```
+
+#### Step 2: Install the New Wheel
+
+```bat
+pip install llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl
+```
+
+#### Step 3: Update Your ComfyUI Plugin
+
+If you use this whl in ComfyUI, you must use a plugin version adapted for 0.3.39+ (see section 3 below).
+
+### 3. Adapted ComfyUI Plugin
+
+The original `comfyui-sg-llama-cpp` plugin does not support the 0.3.39+ MTMD rewrite. The following fork has been adapted:
+
+**https://github.com/allanmeng/comfyui-sg-llama-cpp**
+
+Adaptation details:
+- **`clip_model_path` → `mmproj_path`**: Passed directly to `Llama()`, no manual handler creation
+- **`GenericMTMDChatHandler` parameter filtering**: Takes the union of `GenericMTMDChatHandler` ∪ `MTMDChatHandler` parameters, filtering out `force_reasoning`, `enable_thinking`, and other params not accepted in 0.3.39+
+- **Added `ctx_checkpoints` option** (default `0`): Required for hybrid architecture models (Qwen3.5 etc. Transformer+Mamba)
+- **`vision_image_min_tokens` default** changed from `-1` to `1024` (Qwen-VL minimum requirement)
+- **Removed invalid UI params**: `vision_enable_thinking`, `vision_force_reasoning`, `vision_add_vision_id`
+
+Installation:
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
+```
 
 ---
 
-## ⚠️ Prerequisites
+## Prerequisites
 
 Before installing, you must have the following:
 
 ### 1. Intel Arc GPU Driver
+
 Download and install the latest Intel Arc GPU driver from:
-👉 https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html
+https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html
 
 ### 2. Intel oneAPI Base Toolkit (Required)
+
 The SYCL runtime depends on Intel oneAPI. You do **not** need to install the full toolkit — only the following components are required:
 
 | Component | Why needed |
@@ -49,9 +83,9 @@ The SYCL runtime depends on Intel oneAPI. You do **not** need to install the ful
 | Intel oneAPI Threading Building Blocks (oneTBB) | Provides `tbb12.dll` |
 
 Download Intel oneAPI Base Toolkit (select individual components during install):
-👉 https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html
+https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html
 
-> **Tip:** During installation, you can choose "Custom Installation" and select only the 4 components listed above to save disk space.
+> **Tip:** During installation, choose "Custom Installation" and select only the 4 components listed above to save disk space.
 
 ---
 
@@ -62,7 +96,7 @@ Download Intel oneAPI Base Toolkit (select individual components during install)
 | OS | Windows 10/11 x64 |
 | GPU | Intel Arc (Alchemist / Battlemage) |
 | Driver | Intel Arc GPU driver (latest) |
-| oneAPI | ✅ Required — DPC++ Compiler, oneMKL, oneDNN, oneTBB |
+| oneAPI | Required — DPC++ Compiler, oneMKL, oneDNN, oneTBB |
 
 ---
 
@@ -70,6 +104,7 @@ Download Intel oneAPI Base Toolkit (select individual components during install)
 
 | Version | File | Size |
 |---------|------|------|
+| 0.3.41 | `llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl` | ~22 MB |
 | 0.3.38 | `llama_cpp_python-0.3.38+sycl-cp313-cp313-win_amd64.whl` | ~22 MB |
 | 0.3.36 | `llama_cpp_python-0.3.36+sycl-cp313-cp313-win_amd64.whl` | ~20 MB |
 | 0.3.35 | `llama_cpp_python-0.3.35+sycl-cp313-cp313-win_amd64.whl` | ~19 MB |
@@ -79,7 +114,7 @@ Download Intel oneAPI Base Toolkit (select individual components during install)
 | 0.3.31 | `llama_cpp_python-0.3.31+sycl-cp313-cp313-win_amd64.whl` | ~174 MB |
 | 0.3.30 | `llama_cpp_python-0.3.30+sycl-cp313-cp313-win_amd64.whl` | ~180 MB |
 
-Download from [Releases](../../releases).
+Download from [Releases](https://github.com/allanmeng/llama-cpp-python-sycl-windows/releases).
 
 ---
 
@@ -88,8 +123,11 @@ Download from [Releases](../../releases).
 ### Method 1: pip install (recommended)
 
 ```bat
-pip install llama_cpp_python-0.3.31+sycl-cp313-cp313-win_amd64.whl
+pip uninstall llama-cpp-python -y
+pip install llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl
 ```
+
+Uninstalling first ensures a clean state.
 
 ### Method 2: Manual (for embedded Python environments like ComfyUI)
 
@@ -113,6 +151,7 @@ call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
 ```
 
 Example `start_comfyui.bat`:
+
 ```bat
 @echo off
 call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
@@ -120,9 +159,11 @@ call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
 ......
 "C:\python\python.exe" main.py --listen 0.0.0.0
 ```
+
 ---
 
 ### Create a dedicated preloader plugin
+
 To enable SYCL GPU acceleration for all llama-cpp-python based nodes in ComfyUI, create a dedicated preloader plugin.
 
 #### Step 1: Create plugin directory
@@ -150,7 +191,7 @@ def sycl_preloader():
     try:
         _spec = importlib.util.find_spec('llama_cpp')
         if not _spec:
-            print("[SYCL] 找不到 llama_cpp 包")
+            print("[SYCL] llama_cpp package not found")
             return
         _pkg_dir = Path(_spec.origin).parent
         for _sub in ['', 'lib', 'bin']:
@@ -160,7 +201,7 @@ def sycl_preloader():
         for _p in os.environ.get("PATH", "").split(os.pathsep):
             if "Intel" in _p and os.path.exists(_p):
                 os.add_dll_directory(_p)
-        print("[SYCL] DLL搜索路径注册完成")
+        print("[SYCL] DLL search paths registered")
     except Exception as e:
         print(f"[SYCL] Error: {e}")
 
@@ -187,6 +228,7 @@ The root cause is a **DLL loading restriction introduced in Python 3.8+** on Win
 ComfyUI has a built-in hook called `execute_prestartup_script()`. At startup, ComfyUI scans every subfolder under `custom_nodes\` and executes any file named `prestartup_script.py` it finds there. This happens **before any plugin nodes are imported**, making it the earliest reliable point to run Python code in the ComfyUI process.
 
 The startup order is:
+
 ```
 main.py basic init
     ↓
@@ -221,8 +263,9 @@ This folder has no nodes, no dependencies, and will never be touched by ComfyUI 
 | `n_ctx` | `4096` |
 | `n_threads` | `4` |
 | `n_threads_batch` | `4` |
-| `vision_image_min_tokens` | `-1` |
-| `vision_image_max_tokens` | `-1` |
+| `ctx_checkpoints` | `0` (disabled; required for hybrid models like Qwen3.5) |
+| `vision_image_min_tokens` | `1024` (Qwen-VL minimum requirement) |
+| `vision_image_max_tokens` | `-1` (use default) |
 
 ---
 
