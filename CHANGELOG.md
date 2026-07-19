@@ -1,4 +1,39 @@
 # Changelog
+## [0.3.43+sycl+pr25741+oneapi2610] - 2026-07-19
+
+### Changed from JamePeng (upstream 0.3.43)
+
+升级至 llama-cpp-python 0.3.43。关键改动（来自 JamePeng CHANGELOG）：
+
+- **更好的 llama.cpp ABI 兼容性**：`feat(llama_ext)` 新增可选 `llama-ext.h` API 绑定（NextN/MTP embeddings、模型元数据），符号可选加载以兼容 ABI 变更；`feat(ctypes)` 支持缺失可选符号优雅处理（`required` 标记）、ABI 兼容符号别名。
+- **ctypes 健壮性**：`fix(ctypes)` 在绑定前校验 `argtypes` 参数类型，报错更清晰。
+- **MTMD 性能**：`refactor(mtmd)` 缓存 `GenericMTMD` chat template 解析（每 handler 实例仅解析一次，加速 `__call__`）；`fix(mtmd)` 保留子类自定义 `chat_format`，避免 `AttributeError`。
+- **Gemma4 模板同步**：`patch(Gemma4ChatHandler)` 同步 HuggingFace 最新 gemma4 chat template（null 处理、reasoning 保留、turn-tag 平衡）。
+- **嵌入模块重构**：`refactor(embedding)` 将 `llama_cpp` 导入别名改为 `llama_cpp_lib`，避免命名冲突。
+- **llama.cpp 同步**：同步至 `ggml-org/llama.cpp` commit `86d86ed`，并同步 2026-07-16 的 llama/mtmd/ggml API Binding。
+
+### Changed (this build)
+
+- 构建环境升级至 **Intel oneAPI Base Toolkit 2026.1**（对应 Intel Deep Learning Essentials 2026.0）。**为什么 0.3.43 起改用 oneAPI 2026 编译**：Intel 官方建议用最新 oneAPI / 驱动以确保最佳性能与兼容性，且新版 oneAPI 才对 **Arc B-Series（Battlemage，即本机 B580）** 提供更好支持；软件栈年度对齐（PyTorch 2.13 → DL Essentials 2026.0），故本次升级 oneAPI 后重编。
+- 本地应用 **PR #25741** 补丁（SYCL onednn fattn 单设备同步修复，解决多轮对话第二轮乱码）。
+- **whl 自包含 oneAPI 运行时**（dnnl / mkl / tbb / libomp 等 DLL 一并打包），部署目标机无需预装 oneAPI。
+- 若目标机已安装 Intel oneAPI Toolkit，可手动删除 `llama_cpp/lib/` 下的冗余 oneAPI DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`）以节省空间；删除后运行时由已装 oneAPI 提供。
+
+### Notes
+
+- **oneAPI / Python XPU 版本匹配**：0.3.43 使用 oneAPI 2026 编译，搭配的 Python XPU 运行时（`intel-xpu-backend-for-pytorch` / PyTorch XPU）必须 **≥ 2.13**——因为 oneAPI 2026 的 ABI 与 PyTorch XPU 2.13（对应 DL Essentials 2026.0）对齐，若环境使用更低版本 PyTorch XPU，可能出现 ABI / 运行时不匹配。
+- 自 0.3.43 起，whl 的 `llama_cpp` 在导入时自动注册自身 `lib/` DLL 搜索路径（继承上游 0.3.42 的 Windows DLL 搜索修复），**ComfyUI 中通常无需再放置 `sycl-preloader` 插件**。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+---
+
 ## [0.3.41+sycl] - 2026-07-11
 
 ### Changed from JamePeng

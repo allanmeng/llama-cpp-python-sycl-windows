@@ -62,6 +62,38 @@ git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
 
 ---
 
+## 0.3.43+ Build & Deployment Notes (oneAPI 2026 / Python XPU ≥ 2.13)
+
+### 1. Why 0.3.43 builds with oneAPI 2026
+
+Starting from 0.3.43, the build environment was upgraded to **Intel oneAPI Base Toolkit 2026** (corresponding to Intel Deep Learning Essentials 2026.0). Reasons:
+
+- Intel officially recommends installing the latest oneAPI / GPU driver to ensure performance and compatibility on Intel Arc B580 (Battlemage).
+- 0.3.43 must be paired with a **Python XPU runtime (`intel-xpu-backend-for-pytorch` / PyTorch XPU) ≥ 2.13** (i.e. the PyTorch 2.13 stack). oneAPI 2026 matches it at the ABI and runtime level; mixing an older Python XPU backend (e.g. 2.12 + oneAPI 2025) may cause runtime mismatch.
+
+> **Important**: If your ComfyUI / inference environment uses the PyTorch XPU stack, make sure `intel-xpu-backend-for-pytorch` is **≥ 2.13** to stay consistent with the 0.3.43 oneAPI 2026 build.
+
+### 2. Wheels bundle the oneAPI runtime (self-contained deployment)
+
+Starting from 0.3.43, the published wheels **bundle the full oneAPI runtime** (including `dnnl.dll`, `mkl_*.dll`, `tbb12.dll`, `libomp140.x86_64.dll`, etc.), so the target machine **does NOT need oneAPI pre-installed** to use SYCL acceleration. (When using a 0.3.43+ self-contained wheel, you may skip the oneAPI installation step in the Prerequisites section below.)
+
+### 3. Optional slimming for machines that already have oneAPI Toolkit
+
+If the target machine **already has** Intel oneAPI Base Toolkit (or Deep Learning Essentials) installed, the oneAPI runtime DLLs bundled in the wheel are redundant and can be deleted manually to save disk space:
+
+- Directory: `your_python\Lib\site-packages\llama_cpp\lib\`
+- Files you may delete:
+  - `dnnl.dll`
+  - `mkl_core.3.dll`
+  - `mkl_sycl_blas.6.dll`
+  - `mkl_tbb_thread.3.dll`
+  - `tbb12.dll`
+  - (`libomp140.x86_64.dll` can also be removed if OpenMP is already provided by VS / oneAPI on the system)
+
+> After deletion, the runtime will be provided by the already-installed oneAPI (via `setvars.bat` or system PATH). Make sure oneAPI is correctly installed and loaded, otherwise the library will fail to load due to missing runtime.
+
+---
+
 ## Prerequisites
 
 Before installing, you must have the following:
@@ -104,6 +136,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | Version | File | Size |
 |---------|------|------|
+| 0.3.43 | `llama_cpp_python-0.3.43+sycl+pr25741+oneapi2610-cp313-cp313-win_amd64.whl` | ~109 MB |
 | 0.3.41 | `llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl` | ~27 MB |
 | 0.3.38 | `llama_cpp_python-0.3.38+sycl-cp313-cp313-win_amd64.whl` | ~22 MB |
 | 0.3.36 | `llama_cpp_python-0.3.36+sycl-cp313-cp313-win_amd64.whl` | ~20 MB |
@@ -163,6 +196,8 @@ call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
 ---
 
 ### Create a dedicated preloader plugin
+
+> **Note (since 0.3.43)**: The 0.3.43 wheel bundles the oneAPI runtime and, on importing `llama_cpp`, automatically registers its own `lib/` directory into the DLL search path (inheriting the upstream 0.3.42 Windows DLL search fix). Therefore **in most cases, the `sycl-preloader` plugin is no longer needed in ComfyUI**. The content below is kept for users who need to support 0.3.42 and earlier, or custom deployment scenarios.
 
 To enable SYCL GPU acceleration for all llama-cpp-python based nodes in ComfyUI, create a dedicated preloader plugin.
 

@@ -64,6 +64,38 @@ git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
 
 ---
 
+## 0.3.43+ 构建与部署说明（oneAPI 2026 / Python XPU ≥ 2.13）
+
+### 1. 为什么 0.3.43 起使用 oneAPI 2026 编译
+
+从 0.3.43 开始，本项目的构建环境升级到 **Intel oneAPI Base Toolkit 2026**（对应 Intel Deep Learning Essentials 2026.0）。升级动机：
+
+- Intel 官方建议安装并使用最新 oneAPI / 显卡驱动，以确保 Intel Arc B580（Battlemage）的性能与兼容性。
+- 0.3.43 的编译需要搭配 **Python XPU 运行时（`intel-xpu-backend-for-pytorch` / PyTorch XPU）≥ 2.13**（即 PyTorch 2.13 生态）。oneAPI 2026 与之在 ABI 与运行时层面匹配；若混用旧版 Python XPU 后端（如 2.12 + oneAPI 2025）可能导致运行时不匹配。
+
+> **重要**：若你的 ComfyUI / 推理环境使用 PyTorch XPU 方案，请确保 `intel-xpu-backend-for-pytorch` **≥ 2.13**，与 0.3.43 的 oneAPI 2026 构建保持一致。
+
+### 2. whl 自带 oneAPI 运行时（自包含部署）
+
+自 0.3.43 起，发布的 whl **自带完整的 oneAPI 运行时**（包含 `dnnl.dll`、`mkl_*.dll`、`tbb12.dll`、`libomp140.x86_64.dll` 等），因此部署目标机 **无需预先安装 oneAPI** 即可直接使用 SYCL 加速。（使用 0.3.43+ 自包含 whl 时，可跳过下方「前置要求」中的 oneAPI 安装步骤。）
+
+### 3. 已安装 oneAPI Toolkit 的用户可精简（可选）
+
+若目标机上 **已经安装了** Intel oneAPI Base Toolkit（或 Deep Learning Essentials），whl 内打包的 oneAPI 运行时 DLL 是冗余的，可手动删除以节省磁盘空间：
+
+- 目录：`your_python\Lib\site-packages\llama_cpp\lib\`
+- 可删除的文件：
+  - `dnnl.dll`
+  - `mkl_core.3.dll`
+  - `mkl_sycl_blas.6.dll`
+  - `mkl_tbb_thread.3.dll`
+  - `tbb12.dll`
+  - （`libomp140.x86_64.dll` 若系统已通过 VS / oneAPI 提供 OpenMP，亦可删除）
+
+> 删除后，运行时将通过目标机已安装的 oneAPI（经 `setvars.bat` 或系统 PATH）提供这些 DLL。请确保 oneAPI 已正确安装并加载，否则会因缺少运行时而加载失败。
+
+---
+
 ## 前置要求
 
 安装前，请确保已完成以下步骤：
@@ -106,6 +138,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | 版本 | 文件 | 大小 |
 |------|------|------|
+| 0.3.43 | `llama_cpp_python-0.3.43+sycl+pr25741+oneapi2610-cp313-cp313-win_amd64.whl` | ~109 MB |
 | 0.3.41 | `llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl` | ~27 MB |  
 | 0.3.38 | `llama_cpp_python-0.3.38+sycl-cp313-cp313-win_amd64.whl` | ~22 MB |
 | 0.3.36 | `llama_cpp_python-0.3.36+sycl-cp313-cp313-win_amd64.whl` | ~20 MB |
@@ -164,6 +197,8 @@ call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
 ---
 
 ### 创建专用的预加载插件
+
+> **注意（自 0.3.43 起）**：0.3.43 的 whl 已自带 oneAPI 运行时，并在导入 `llama_cpp` 时自动将自身 `lib/` 目录注册到 DLL 搜索路径（继承上游 0.3.42 的 Windows DLL 搜索修复）。因此 **通常情况下，ComfyUI 中不再需要放置 `sycl-preloader` 插件**。以下内容仅供需要兼容 0.3.42 及更早版本，或自定义部署环境的用户参考。
 
 为所有基于 llama-cpp-python 的 ComfyUI 节点启用 SYCL GPU 加速，需要创建一个专用的预加载插件。
 
