@@ -94,6 +94,21 @@ git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
 
 > 删除后，运行时将通过目标机已安装的 oneAPI（经 `setvars.bat` 或系统 PATH）提供这些 DLL。请确保 oneAPI 已正确安装并加载，否则会因缺少运行时而加载失败。
 
+### 4. PR #25880 补丁：修复 SYCL onednn fattn 长上下文乱码
+
+0.3.43 版本本地应用了 [PR #25880](https://github.com/ggml-org/llama.cpp/pull/25880)（ggml-org/llama.cpp）补丁，修复了 SYCL onednn flash-attention 路径下的 **use-after-return** 问题。
+
+**症状**：在较长上下文（n_kv ≥ ~26k，如多轮对话第二轮）时，oneDNN fattn 的输出塌缩为重复 token（"GGGGG…" 模式）。
+
+**根因**：SDPA scale 值通过 async memcpy 从 CPU 上传到 GPU device buffer，源是栈局部变量。当 K/V staging 内核在 in-order 队列中先于 memcpy 完成时，栈帧已被回收，memcpy 读到垃圾值 → 后续 SDPA 使用错误的 scale → 输出乱码。
+
+**修复方案**：
+- 将 scale 上传改为**同步 memcpy**（`.wait()`），确保拷贝完成后再返回 buffer 指针
+- 使用 **per-device device scalar 缓存**（`static std::unordered_map`），scale 值仅首次同步上传一次，后续复用缓存，消除重复 sync 开销
+- 新增环境变量 `GGML_SYCL_FA_ONEDNN_MAX_KV`（默认 0 = 不限），可在极长序列场景选择性回退到原生 FA kernel
+
+**与之前 PR #25741 的区别**：原先的 #25741 使用无条件 `wait_and_throw()` 来掩盖问题（靠撑住栈帧让 async memcpy 完成），但每调用付出 ~6% PP 性能代价。`#25880` 从根因修复，且单设备无性能损失。
+
 ---
 
 ## 前置要求
@@ -138,7 +153,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | 版本 | 文件 | 大小 |
 |------|------|------|
-| 0.3.43 | `llama_cpp_python-0.3.43+sycl+pr25741+oneapi2610-cp313-cp313-win_amd64.whl` | ~109 MB |
+| 0.3.43 | `llama_cpp_python-0.3.43+sycl+pr25880+oneapi2610-cp313-cp313-win_amd64.whl` | ~109 MB |
 | 0.3.41 | `llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl` | ~27 MB |  
 | 0.3.38 | `llama_cpp_python-0.3.38+sycl-cp313-cp313-win_amd64.whl` | ~22 MB |
 | 0.3.36 | `llama_cpp_python-0.3.36+sycl-cp313-cp313-win_amd64.whl` | ~20 MB |

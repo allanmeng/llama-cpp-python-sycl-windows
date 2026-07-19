@@ -1,5 +1,5 @@
 # Changelog
-## [0.3.43+sycl+pr25741+oneapi2610] - 2026-07-19
+## [0.3.43+sycl+pr25880+oneapi2610] - 2026-07-20
 
 ### Changed from JamePeng (upstream 0.3.43)
 
@@ -15,7 +15,7 @@
 ### Changed (this build)
 
 - 构建环境升级至 **Intel oneAPI Base Toolkit 2026.1**（对应 Intel Deep Learning Essentials 2026.0）。**为什么 0.3.43 起改用 oneAPI 2026 编译**：Intel 官方建议用最新 oneAPI / 驱动以确保最佳性能与兼容性，且新版 oneAPI 才对 **Arc B-Series（Battlemage，即本机 B580）** 提供更好支持；软件栈年度对齐（PyTorch 2.13 → DL Essentials 2026.0），故本次升级 oneAPI 后重编。
-- 本地应用 **PR #25741** 补丁（SYCL onednn fattn 单设备同步修复，解决多轮对话第二轮乱码）。
+- 本地应用 **PR #25880** 补丁（SYCL onednn fattn use-after-return 修复）。根因：SDPA scale 经 async memcpy 上传、源为栈局部变量，长上下文（n_kv ≥ ~26k）时栈帧释放 → 读到垃圾 scale → 输出塌缩为重复 token。修复方案：将 scale 改为同步 memcpy 上传并使用 device scalar 缓存，确保 GPU 读取时 scale 值始终有效。同时新增环境变量 `GGML_SYCL_FA_ONEDNN_MAX_KV`（默认0=不限），可在极长序列场景选择性回退到原生 FA kernel。与原先的 PR #25741（无条件 wait_and_throw 掩盖症状，每调用多付出 ~6% PP 性能代价）相比，#25880 从根因修复且单设备无性能损失。
 - **whl 自包含 oneAPI 运行时**（dnnl / mkl / tbb / libomp 等 DLL 一并打包），部署目标机无需预装 oneAPI。
 - 若目标机已安装 Intel oneAPI Toolkit，可手动删除 `llama_cpp/lib/` 下的冗余 oneAPI DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`）以节省空间；删除后运行时由已装 oneAPI 提供。
 
