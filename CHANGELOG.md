@@ -1,4 +1,34 @@
 # Changelog
+## [0.3.44+sycl+pr25880] - 2026-07-31
+
+### Changed from JamePeng (upstream 0.3.44)
+
+升级至 llama-cpp-python 0.3.44。关键改动（来自 JamePeng CHANGELOG）：
+
+- **Windows DLL(OpenMP) 加载可靠性修复**：`fix(ggml)` 在加载 `ggml-base` 之前预加载包内自带的 `libomp140.x86_64.dll`（OpenMP 运行时），确保 CPU 后端 DLL 能正确解析 OpenMP 依赖。此前的风险：外部应用（如 ComfyUI 及第三方插件）可能修改进程 DLL 搜索行为，导致系统目录（如 `C:\Windows\System32`）中不兼容版本的 `libomp140.x86_64.dll`（非 VC143 构建）被优先加载，从而引发 `ggml-cpu` 加载失败。修复后用户无需配置 PATH 或手动安装 OpenMP 运行时。仅适用于 Windows + `llama-cpp-python >= 0.3.39`。
+- **llama.cpp 同步**：同步至 `ggml-org/llama.cpp` commit `846e991`（`cuda: add sqrt_softplus in topk-moe for dsv4`，DeepSeek V4 的 MoE topk 路由优化，CUDA 后端，对 SYCL 无影响）。
+
+### Changed (this build)
+
+- **#25880 补丁继续生效**：llama.cpp 上游已于 2026-07-28 合并 PR #25880（`sycl: fix use-after-return of the SDPA scale in the oneDNN flash-attention path`），但 0.3.44 所同步的 llama.cpp `846e991`（2026-07-21）尚未包含，故本构建仍保留本地 patch（与 0.3.43+pr25880 相同）。修复 SYCL onednn fattn 长上下文（n_kv ≥ ~26k）下 SDPA scale use-after-return 导致的多轮对话乱码问题。预计 JamePeng 后续版本同步包含 #25880 的 llama.cpp 后，可移除本地补丁。
+- **打包方式切换为方案 A（精简版）**：whl **不再自包含 oneAPI 运行时**，移除了与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积从 ~109 MiB 降至 ~36 MiB。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl7.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：0.3.44 的 OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+
+### Notes
+
+- **oneAPI / Python XPU 版本匹配**：搭配的 Python XPU 运行时（`intel-xpu-backend-for-pytorch` / PyTorch XPU）必须 **≥ 2.13**——与 oneAPI 2026 的 ABI 对齐。
+- 自 0.3.43 起，whl 的 `llama_cpp` 在导入时自动注册自身 `lib/` DLL 搜索路径（继承上游 0.3.42 的 Windows DLL 搜索修复），**ComfyUI 中通常无需再放置 `sycl-preloader` 插件**。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+---
+
 ## [0.3.43+sycl+pr25880+oneapi2610] - 2026-07-20
 
 ### Changed from JamePeng (upstream 0.3.43)

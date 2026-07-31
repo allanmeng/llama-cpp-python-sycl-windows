@@ -41,3 +41,7 @@ build_install.bat
 validate_handlers.bat
 validate_handlers.py
 patches/
+
+# Build/Pack status markers (written by build_install.bat and pack_sycl_whl.py)
+_build_done.marker
+_pack_done.marker
