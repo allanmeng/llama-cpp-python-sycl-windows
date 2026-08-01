@@ -1,4 +1,35 @@
 # Changelog
+## [0.3.45+sycl] - 2026-08-01
+
+### Changed from JamePeng (upstream 0.3.45)
+
+升级至 llama-cpp-python 0.3.45。关键改动（来自 JamePeng CHANGELOG）：
+
+- **llama-ext 绑定签名修正**：`fix(ctypes)` 修正 `llama-ext.h` API 绑定的函数签名，提升 ABI 兼容性。
+- **模型加载选项扩展**：`feat(llama)` 暴露更多 `llama_model_params` 加载选项（如 `load_mode`），支持更细粒度的模型加载控制。
+- **llama.cpp 同步**：同步至 `ggml-org/llama.cpp` commit `876a432`。
+
+### Changed (this build)
+
+- **🎉 本地 #25880 补丁退役**：llama.cpp 上游已合并 PR #25880（`sycl: fix use-after-return of the SDPA scale in the oneDNN flash-attention path`，2026-07-28），0.3.45 所同步的 llama.cpp `876a432` 已原生包含该修复（scale 改为 kernel 写入 device scalar，`wait_and_throw()` 仅多设备分支，`GGML_SYCL_FA_ONEDNN_MAX_KV` 逃生口齐全）。**本构建不再需要本地 patch**，多轮对话乱码修复由上游原生提供。`patches/` 目录保留存档。
+- **打包方式为方案 A（精简版）**：whl **不自包含 oneAPI 运行时**，移除了与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 36 MB。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl7.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：0.3.44 引入的 OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+
+### Notes
+
+- **oneAPI / Python XPU 版本匹配**：搭配的 Python XPU 运行时（`intel-xpu-backend-for-pytorch` / PyTorch XPU）必须 **≥ 2.13**——与 oneAPI 2026 的 ABI 对齐。
+- 自 0.3.43 起，whl 的 `llama_cpp` 在导入时自动注册自身 `lib/` DLL 搜索路径（继承上游 0.3.42 的 Windows DLL 搜索修复），**ComfyUI 中通常无需再放置 `sycl-preloader` 插件**。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+---
+
 ## [0.3.44+sycl+pr25880] - 2026-07-31
 
 ### Changed from JamePeng (upstream 0.3.44)
