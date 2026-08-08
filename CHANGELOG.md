@@ -1,4 +1,38 @@
 # Changelog
+## [0.3.46+sycl] - 2026-08-08
+
+### Changed from JamePeng (upstream 0.3.46)
+
+升级至 llama-cpp-python 0.3.46。关键改动（来自 JamePeng Release Note，discussion #166）：
+
+- **扩展模型检查 API**：新增 `target_layer_ids()`（获取模型目标层索引）和 `get_tok_embd()`（提取 token 嵌入矩阵为 NumPy 数组），均含原生返回值校验（空指针、嵌入尺寸异常、数据拷贝不完整），运行时错误信息更清晰。
+- **NextN / Layer 嵌入 API**：`LlamaContext` 内部暴露 NextN 嵌入能力（NextN 与层输入嵌入访问、NextN 层偏移配置、辅助 context 句柄），Python 层增加非法 layer ID / 非法偏移 / 嵌入输出不可用校验。为未来模型架构与高级推理流程打基础。
+- **MTMD 绑定同步**：更新至 llama.cpp 最新实验性 MTMD API——输入 chunk 序列化/恢复、实验性生成音频 API 结构与处理接口（目前仅绑定层暴露，高层工作流后续版本推出）、HunyuanVL 解码器位置支持、枚举值同步与 ctypes 签名修正。
+- **Windows 运行时兼容性改进**（ComfyUI 相关）：修复同一进程加载多个 OpenMP 运行时的潜在冲突；修复外部环境 ggml 动态库冲突；**移除 `/bin` 目录搜索**，ggml 动态库加载行为更可预测。
+- **llama.cpp 同步**：同步至 `ggml-org/llama.cpp` commit `69bf6437`（2026-08-08 API 绑定同步）。
+
+### Changed (this build)
+
+- **零本地补丁**：llama.cpp `69bf6437` 原生包含 PR #25880 修复（SYCL onednn fattn use-after-return 修复），本构建无需任何本地 patch。
+- **打包方式为方案 A（精简版）**：whl **不自包含 oneAPI 运行时**，移除了与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 35 MB。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl7.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+
+### Notes
+
+- **oneAPI / Python XPU 版本匹配**：搭配的 Python XPU 运行时（`intel-xpu-backend-for-pytorch` / PyTorch XPU）必须 **≥ 2.13**——与 oneAPI 2026 的 ABI 对齐。
+- 自 0.3.43 起，whl 的 `llama_cpp` 在导入时自动注册自身 `lib/` DLL 搜索路径（继承上游 0.3.42 的 Windows DLL 搜索修复），**ComfyUI 中通常无需再放置 `sycl-preloader` 插件**。
+- **音频生成接口目前仅绑定级暴露**：0.3.46 的 MTMD 生成音频 API 为实验性绑定适配，高层 Python 工作流尚未集成，等上游稳定后后续版本推出。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+---
+
 ## [0.3.45+sycl] - 2026-08-01
 
 ### Changed from JamePeng (upstream 0.3.45)
