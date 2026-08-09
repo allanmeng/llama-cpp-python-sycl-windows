@@ -45,3 +45,9 @@ patches/
 # Build/Pack status markers (written by build_install.bat and pack_sycl_whl.py)
 _build_done.marker
 _pack_done.marker
+
+# Upstream source clone (fetched from JamePeng, not part of this repo)
+llama-cpp-python/
+
+# WorkBuddy workspace memory (local only)
+.workbuddy/
