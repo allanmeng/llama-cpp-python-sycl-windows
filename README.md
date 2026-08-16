@@ -10,6 +10,33 @@
 
 ---
 
+## 最新版本说明（v0.3.47+sycl · 2026-08-16）
+
+**核心亮点：实测性能提升 +15%，历代最优**
+
+- 升级至 llama-cpp-python **0.3.47**（同步 llama.cpp `ad1de39e`，零本地补丁，#25880 由上游原生合入）
+- **MTMD Pocket TTS 音频绑定**：音频生成实验线继续演进（目前仍为绑定级暴露，高层工作流待上游稳定后推出）
+- **多输出后端采样器 API** + 自定义采样器钩子修复
+- **模型 reset 修复**（`reset()` 完全清理模型状态）
+
+**🚀 B580 实测性能（Qwen3-VL 视觉模型）：**
+
+| 指标 | 0.3.45 | 0.3.47 | 变化 |
+|------|--------|--------|------|
+| 生成速度 | 72.74 / 72.88 t/s | **83.61 t/s** | **+15%** |
+| 热启动总耗时 | 33.28s | **25.75s** | 快 7.5s |
+
+> 0.3.46 未留存 perf 数据，故对比基准为 0.3.45。
+
+**社区反馈：**
+
+> ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** —— 视觉模型兼容性良好
+> 详见：https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
+
+**安装包**：`llama_cpp_python-0.3.47+sycl-cp313-cp313-win_amd64.whl`（约 36MB，精简版，需预装 oneAPI 2026.1）
+
+---
+
 ## 0.3.39+ 重要变更说明
 
 ### 1. llama-cpp-python-sycl-windows 在 0.3.39 之后发生了哪些变化

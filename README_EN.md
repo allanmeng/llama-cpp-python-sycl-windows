@@ -8,6 +8,33 @@ Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) wh
 
 ---
 
+## Latest Release Notes (v0.3.47+sycl · 2026-08-16)
+
+**Key highlight: Measured performance +15%, fastest version to date**
+
+- Upgraded to llama-cpp-python **0.3.47** (llama.cpp `ad1de39e`, zero local patches — #25880 natively merged upstream)
+- **MTMD Pocket TTS audio bindings**: audio-generation experimental line continues (still binding-level only; high-level workflows await upstream stabilization)
+- **Multi-output backend sampler API** + custom-sampler hook fixes
+- **Model reset fix** (`reset()` now fully clears model state)
+
+**🚀 Measured performance on B580 (Qwen3-VL vision model):**
+
+| Metric | 0.3.45 | 0.3.47 | Change |
+|--------|--------|--------|--------|
+| Generation speed | 72.74 / 72.88 t/s | **83.61 t/s** | **+15%** |
+| Warm-start total time | 33.28s | **25.75s** | 7.5s faster |
+
+> 0.3.46 has no recorded perf data, so the baseline is 0.3.45.
+
+**Community feedback:**
+
+> ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** — vision model compatibility confirmed
+> See: https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
+
+**Wheel**: `llama_cpp_python-0.3.47+sycl-cp313-cp313-win_amd64.whl` (~36 MB, slim build, requires oneAPI 2026.1)
+
+---
+
 ## Important Changes in 0.3.39+
 
 ### 1. What Changed in llama-cpp-python-sycl-windows After 0.3.39
