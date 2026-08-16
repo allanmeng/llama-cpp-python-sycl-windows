@@ -1,4 +1,50 @@
 # Changelog
+## [0.3.47+sycl] - 2026-08-16
+
+### Changed from JamePeng (upstream 0.3.47)
+
+升级至 llama-cpp-python 0.3.47。关键改动（来自 JamePeng 上游 commit 历史）：
+
+- **MTMD Pocket TTS 音频绑定**：`feat(mtmd)` 同步 Pocket TTS 与音频辅助 API 绑定，继续演进 0.3.46 开启的音频生成实验线（目前仍为绑定级暴露）。
+- **多输出后端采样器 API**：`feat(llama)` 新增 multi-output backend sampler API 支持；同时 `fix(internals)` 为自定义采样器禁用新的后端钩子（避免兼容性问题）。
+- **模型 reset 修复**：`fix(llama)` 完全清理模型状态（`reset()` 更彻底，不再残留旧状态）。
+- **类型修复**：`fix(types)` sampler count 改用 `size_t` 对齐原生签名。
+- **llama.cpp 同步**：同步至 `ggml-org/llama.cpp` commit `ad1de39e`（gguf-v0.19.0-1402）。
+
+### Changed (this build)
+
+- **零本地补丁**：llama.cpp `ad1de39e` 原生包含 PR #25880 修复（SYCL onednn fattn use-after-return 修复），本构建无需任何本地 patch。
+- **打包方式为方案 A（精简版）**：whl **不自包含 oneAPI 运行时**，移除了与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 36 MB。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+
+### Performance (measured, B580)
+
+> 实测环境：Intel Arc B580 / Windows 11 / Python 3.13.11 / oneAPI 2026.1 / Qwen3-VL 视觉模型
+
+| 指标 | 0.3.45 | 0.3.47 | 变化 |
+|------|--------|--------|------|
+| 生成速度 | 72.74 / 72.88 t/s | **83.61 t/s** | 🚀 +15% |
+| 单 token 耗时 | 13.75 ms | **11.96 ms** | 更快 |
+| 热启动总耗时 | 33.28s | **25.75s** | 快 7.5s |
+
+> 0.3.46 未留存 perf 数据，故对比基准为 0.3.45。0.3.47 为历代实测性能最优版本。
+
+### Notes
+
+- **oneAPI / Python XPU 版本匹配**：搭配的 Python XPU 运行时（`intel-xpu-backend-for-pytorch` / PyTorch XPU）必须 **≥ 2.13**——与 oneAPI 2026 的 ABI 对齐。
+- 自 0.3.43 起，whl 的 `llama_cpp` 在导入时自动注册自身 `lib/` DLL 搜索路径，**ComfyUI 中通常无需再放置 `sycl-preloader` 插件**。
+- **音频生成接口目前仅绑定级暴露**：Pocket TTS 等 MTMD 音频 API 为实验性绑定适配，高层 Python 工作流尚未集成，等上游稳定后后续版本推出。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+---
+
 ## [0.3.46+sycl] - 2026-08-08
 
 ### Changed from JamePeng (upstream 0.3.46)
