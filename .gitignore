@@ -51,3 +51,11 @@ llama-cpp-python/
 
 # WorkBuddy workspace memory (local only)
 .workbuddy/
+
+# Local-only docs / diagnostic / release-draft artifacts (not published to remote)
+RELEASE_WORKFLOW.md
+mtmd-large-image-crash-report.md
+release_notes_0348.md
+test_mtmd_large_image.bat
+test_mtmd_large_image.py
+关于 llama-cpp-python-sycl-win说明（夸克）.md
