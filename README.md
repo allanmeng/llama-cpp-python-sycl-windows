@@ -33,7 +33,8 @@ GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)
 
 - 现象：Qwen3.5 等带 SWA 层的 hybrid 视觉模型，大图（约 4000+ vision tokens）下 prefill 正常，但**首 decode token 崩溃**（`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`）
 - 根因：调用方传 `ctx_checkpoints=0` 会强制 hybrid 模型走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token。此问题在 0.3.48+ 稳定暴露
-- 规避：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开缺陷分支）。ComfyUI-sg-llama-cpp fork 已在 `1f0fc15` 将默认改为 `-1` 并加响应式 `n_ctx` hint
+- 规避：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开缺陷分支）
+- **✅ 官方推荐插件已修复**：[comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已在 `1f0fc15` 将 `ctx_checkpoints` 默认改为 `-1` 并加响应式 `n_ctx` hint，大图视觉推理已恢复正常。使用此插件无需手动处理
 - **本 wheel 本身无此 bug**：纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常
 
 **🚀 B580 实测性能（Qwen3-VL 视觉模型，0.3.47 基准）：**
@@ -42,6 +43,20 @@ GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)
 |------|--------|--------|------|
 | 生成速度 | 72.74 / 72.88 t/s | **83.61 t/s** | **+15%** |
 | 热启动总耗时 | 33.28s | **25.75s** | 快 7.5s |
+
+**🚀 B580 实测性能（Qwen3.5-4B 视觉模型 + 大图 2336×1760，0.3.48）：**
+
+| 指标 | 数值 |
+|------|------|
+| 视觉 token 数 | 4015（image slice 4015 tokens） |
+| 图像编码耗时 | 10846 ms（clip_encode） |
+| 图像解码耗时 | 1126 ms（batch 1/2）+ 1484 ms（batch 2/2） |
+| 生成速度 | **82.16 t/s**（eval 18293.94 ms / 1503 runs） |
+| 总耗时 | 23602.79 ms / 1504 tokens |
+| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），rollback 命中 101 prefix |
+| SYCL 计算缓冲 | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB |
+
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，2336×1760 大图，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`。本场景验证了 hybrid 视觉模型在 0.3.48 下大图推理正常、无首 decode 崩溃。
 
 > 0.3.48 性能基准待补充；0.3.46 未留存 perf 数据，故对比基准为 0.3.45。
 

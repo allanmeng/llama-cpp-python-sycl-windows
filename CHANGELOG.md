@@ -15,7 +15,23 @@
 - **打包方式为方案 A（精简版）**：whl **不自包含 oneAPI 运行时**，移除了与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 36 MB。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
 - **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
 - **⚠️ BREAKING：`GenericMTMDChatHandler` 构造签名变更（0.3.48）**：从 0.3.47 的 `GenericMTMDChatHandler(clip_model_path=...)` 变为 `GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)`（`chat_format` 可为 `None` 自动解析，`mmproj_path` 为必填位置参数）。下游插件 / 自定义脚本作者必须跟进此变更，否则构造期直接报缺位置参数。视觉 handler（`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / `GenericMTMDChatHandler`）及音频 handler（`Qwen3ASRChatHandler`）在本构建下均验证可正常导入。
-- **⚠️ 已知集成注意：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃**：Qwen3.5 等带 SWA 层的 hybrid 视觉模型，大图（约 4000+ vision tokens）下 prefill 正常但**首 decode token 崩溃**（`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`）。根因为调用方传 `ctx_checkpoints=0` 强制 hybrid 走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token，此问题在 0.3.48+ 稳定暴露。规避：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开缺陷分支）。ComfyUI-sg-llama-cpp fork 已在 `1f0fc15` 将默认改为 `-1` 并加响应式 `n_ctx` hint。**本 wheel 本身无此 bug**：纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常。
+- **⚠️ 已知集成注意：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃**：Qwen3.5 等带 SWA 层的 hybrid 视觉模型，大图（约 4000+ vision tokens）下 prefill 正常但**首 decode token 崩溃**（`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`）。根因为调用方传 `ctx_checkpoints=0` 强制 hybrid 走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token，此问题在 0.3.48+ 稳定暴露。规避：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开缺陷分支）。**✅ 官方推荐插件 [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已在 `1f0fc15` 将默认改为 `-1` 并加响应式 `n_ctx` hint，大图视觉推理已恢复正常**。**本 wheel 本身无此 bug**：纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常。
+
+### Performance (measured, B580)
+
+**Qwen3.5-4B 视觉模型 + 大图 2336×1760（0.3.48）：**
+
+| 指标 | 数值 |
+|------|------|
+| 视觉 token 数 | 4015（image slice 4015 tokens） |
+| 图像编码耗时 | 10846 ms（clip_encode） |
+| 图像解码耗时 | 1126 ms（batch 1/2）+ 1484 ms（batch 2/2） |
+| 生成速度 | 82.16 t/s（eval 18293.94 ms / 1503 runs） |
+| 总耗时 | 23602.79 ms / 1504 tokens |
+| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），rollback 命中 101 prefix |
+| SYCL 计算缓冲 | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB |
+
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，2336×1760 大图，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`。本场景验证 hybrid 视觉模型在 0.3.48 下大图推理正常、无首 decode 崩溃。
 
 ### Environment
 

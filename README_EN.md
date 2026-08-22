@@ -31,7 +31,8 @@ GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)
 
 - Symptom: hybrid vision models with SWA layers (e.g. Qwen3.5), on large images (~4000+ vision tokens), prefill succeeds but **first decode token crashes** (`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`)
 - Root cause: caller passing `ctx_checkpoints=0` forces the hybrid model down a "Bypassing rollback" fast-path that has no slot headroom for the first decode token on large prefills. This surfaces stably in 0.3.48+
-- Workaround: use default `ctx_checkpoints=-1` (enables checkpoint cache, avoids the broken branch). ComfyUI-sg-llama-cpp fork fixed default to `-1` in `1f0fc15` with a reactive `n_ctx` hint
+- Workaround: use default `ctx_checkpoints=-1` (enables checkpoint cache, avoids the broken branch)
+- **✅ Official recommended plugin fixed**: [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) changed the default to `-1` in `1f0fc15` with a reactive `n_ctx` hint; large-image vision inference now works normally. No manual handling needed when using this plugin
 - **This wheel has no such bug**: pure `llama_cpp.Llama` on the same model + large image at `n_ctx=8192` verified working (double-checked)
 
 **🚀 Measured performance on B580 (Qwen3-VL vision model, 0.3.47 baseline):**
@@ -41,7 +42,19 @@ GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)
 | Generation speed | 72.74 / 72.88 t/s | **83.61 t/s** | **+15%** |
 | Warm-start total time | 33.28s | **25.75s** | 7.5s faster |
 
-> 0.3.48 perf baseline TBD; 0.3.46 has no recorded perf data, so the baseline is 0.3.45.
+**🚀 Measured performance on B580 (Qwen3.5-4B vision model + large image 2336×1760, 0.3.48):**
+
+| Metric | Value |
+|--------|-------|
+| Vision tokens | 4015 (image slice 4015 tokens) |
+| Image encode time | 10846 ms (clip_encode) |
+| Image decode time | 1126 ms (batch 1/2) + 1484 ms (batch 2/2) |
+| Generation speed | **82.16 t/s** (eval 18293.94 ms / 1503 runs) |
+| Total time | 23602.79 ms / 1504 tokens |
+| Hybrid checkpoint | 2 host checkpoints (50.25 MiB each), rollback hit 101 prefix |
+| SYCL compute buffer | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB |
+
+> Test scene: Qwen3.5-4B-Uncensored + mmproj-BF16, 2336×1760 large image, hybrid architecture (with SWA layers), `ctx_checkpoints=-1`, `n_ctx=8192`. This scene verifies that hybrid vision models run normally on large images under 0.3.48 with no first-decode crash.
 
 **Community feedback:**
 
