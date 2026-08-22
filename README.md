@@ -37,13 +37,6 @@ GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)
 - **✅ 官方推荐插件已修复**：[comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已在 `1f0fc15` 将 `ctx_checkpoints` 默认改为 `-1` 并加响应式 `n_ctx` hint，大图视觉推理已恢复正常。使用此插件无需手动处理
 - **本 wheel 本身无此 bug**：纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常
 
-**🚀 B580 实测性能（Qwen3-VL 视觉模型，0.3.47 基准）：**
-
-| 指标 | 0.3.45 | 0.3.47 | 变化 |
-|------|--------|--------|------|
-| 生成速度 | 72.74 / 72.88 t/s | **83.61 t/s** | **+15%** |
-| 热启动总耗时 | 33.28s | **25.75s** | 快 7.5s |
-
 **🚀 B580 实测性能（Qwen3.5-4B 视觉模型 + 大图 2336×1760，0.3.48）：**
 
 | 指标 | 数值 |

@@ -35,13 +35,6 @@ GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)
 - **✅ Official recommended plugin fixed**: [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) changed the default to `-1` in `1f0fc15` with a reactive `n_ctx` hint; large-image vision inference now works normally. No manual handling needed when using this plugin
 - **This wheel has no such bug**: pure `llama_cpp.Llama` on the same model + large image at `n_ctx=8192` verified working (double-checked)
 
-**🚀 Measured performance on B580 (Qwen3-VL vision model, 0.3.47 baseline):**
-
-| Metric | 0.3.45 | 0.3.47 | Change |
-|--------|--------|--------|--------|
-| Generation speed | 72.74 / 72.88 t/s | **83.61 t/s** | **+15%** |
-| Warm-start total time | 33.28s | **25.75s** | 7.5s faster |
-
 **🚀 Measured performance on B580 (Qwen3.5-4B vision model + large image 2336×1760, 0.3.48):**
 
 | Metric | Value |
