@@ -10,30 +10,47 @@
 
 ---
 
-## 最新版本说明（v0.3.47+sycl · 2026-08-16）
+## 最新版本说明（v0.3.48+sycl · 2026-08-22）
 
-**核心亮点：实测性能提升 +15%，历代最优**
+**核心亮点：Stateful MTP 投机解码 + 零本地补丁**
 
-- 升级至 llama-cpp-python **0.3.47**（同步 llama.cpp `ad1de39e`，零本地补丁，#25880 由上游原生合入）
-- **MTMD Pocket TTS 音频绑定**：音频生成实验线继续演进（目前仍为绑定级暴露，高层工作流待上游稳定后推出）
-- **多输出后端采样器 API** + 自定义采样器钩子修复
-- **模型 reset 修复**（`reset()` 完全清理模型状态）
+- 升级至 llama-cpp-python **0.3.48**（基于 JamePeng release commit `7562297`，同步 llama.cpp `bb4caa754`，零本地补丁，#25880 由上游原生合入）
+- **Stateful MTP 投机解码**：`LlamaSpecEngine` 生命周期 + `SpecConfig` / `SpeculativeType` 落地；**BREAKING** 移除旧 `LlamaPromptLookupDecoding`，NGram 走新生命周期。推荐 Qwen3.8 27B 起手 `draft_n_max=2`；MTP 目前仅文本 / 单序列
+- **fix(mtmd) ctypes 指针绑定修正**：`unsigned char *` 从 `c_char_p` 改为 `POINTER(c_uint8)`
 
-**🚀 B580 实测性能（Qwen3-VL 视觉模型）：**
+**⚠️ BREAKING：`GenericMTMDChatHandler` 构造签名变更（0.3.48）**
+
+```python
+# 0.3.47
+GenericMTMDChatHandler(clip_model_path=...)
+# 0.3.48
+GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)
+```
+
+`chat_format` 可为 `None`（自动解析），`mmproj_path` 为**必填位置参数**。下游插件 / 自定义脚本作者必须跟进此变更。
+
+**⚠️ 已知集成注意：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃**
+
+- 现象：Qwen3.5 等带 SWA 层的 hybrid 视觉模型，大图（约 4000+ vision tokens）下 prefill 正常，但**首 decode token 崩溃**（`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`）
+- 根因：调用方传 `ctx_checkpoints=0` 会强制 hybrid 模型走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token。此问题在 0.3.48+ 稳定暴露
+- 规避：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开缺陷分支）。ComfyUI-sg-llama-cpp fork 已在 `1f0fc15` 将默认改为 `-1` 并加响应式 `n_ctx` hint
+- **本 wheel 本身无此 bug**：纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常
+
+**🚀 B580 实测性能（Qwen3-VL 视觉模型，0.3.47 基准）：**
 
 | 指标 | 0.3.45 | 0.3.47 | 变化 |
 |------|--------|--------|------|
 | 生成速度 | 72.74 / 72.88 t/s | **83.61 t/s** | **+15%** |
 | 热启动总耗时 | 33.28s | **25.75s** | 快 7.5s |
 
-> 0.3.46 未留存 perf 数据，故对比基准为 0.3.45。
+> 0.3.48 性能基准待补充；0.3.46 未留存 perf 数据，故对比基准为 0.3.45。
 
 **社区反馈：**
 
 > ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** —— 视觉模型兼容性良好
 > 详见：https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
 
-**安装包**：`llama_cpp_python-0.3.47+sycl-cp313-cp313-win_amd64.whl`（约 36MB，精简版，需预装 oneAPI 2026.1）
+**安装包**：`llama_cpp_python-0.3.48+sycl-cp313-cp313-win_amd64.whl`（约 36MB，精简版，需预装 oneAPI 2026.1）
 
 ---
 
@@ -48,7 +65,7 @@
 | 视觉模型加载方式 | 手动创建 `clip_model_path` handler 注入 `Llama()` | `mmproj_path` 直接传给 `Lama()`，内部自动创建 handler |
 | 视觉 handler 类 | 模型特定 handler（如 `Qwen3VLChatHandler`） | `GenericMTMDChatHandler` 统一处理 |
 | handler 参数传递 | 直接传给 handler 构造函数 | 通过 `chat_handler_kwargs` dict 传递 |
-| 混合架构模型 | 无特殊处理 | 需设置 `ctx_checkpoints=0`（如 Qwen3.5） |
+| 混合架构模型 | 无特殊处理 | 用默认 `ctx_checkpoints=-1`（如 Qwen3.5）；**勿传 `0`**，0.3.48+ 会触发 hybrid fast-path 首 decode 崩溃 |
 
 ### 2. 从 0.3.38 或更早版本升级的用户需要手工清理哪些内容
 
@@ -79,7 +96,7 @@ pip install llama_cpp_python-0.3.41+sycl-cp313-cp313-win_amd64.whl
 适配内容：
 - **`clip_model_path` → `mmproj_path`**：直接传给 `Llama()`，不再手动创建 handler
 - **`GenericMTMDChatHandler` 参数过滤**：取 `GenericMTMDChatHandler` ∪ `MTMDChatHandler` 参数并集，过滤掉 `force_reasoning`、`enable_thinking` 等 0.3.39+ 不接受的参数
-- **新增 `ctx_checkpoints` 选项**（默认 `0`）：混合架构模型（Qwen3.5 等 Transformer+Mamba）必须设置
+- **新增 `ctx_checkpoints` 选项**（默认 `-1`）：混合架构模型（Qwen3.5 等 Transformer+Mamba）使用默认即可；**勿设为 `0`**，0.3.48+ 会触发 hybrid fast-path 首 decode 崩溃
 - **`vision_image_min_tokens` 默认值**从 `-1` 改为 `1024`（Qwen-VL 最低要求）
 - **移除无效 UI 参数**：`vision_enable_thinking`、`vision_force_reasoning`、`vision_add_vision_id`
 
@@ -102,24 +119,19 @@ git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
 
 > **重要**：若你的 ComfyUI / 推理环境使用 PyTorch XPU 方案，请确保 `intel-xpu-backend-for-pytorch` **≥ 2.13**，与 0.3.43 的 oneAPI 2026 构建保持一致。
 
-### 2. whl 自带 oneAPI 运行时（自包含部署）
+### 2. whl 打包方式：方案 A（精简版，不含 oneAPI 运行时）
 
-自 0.3.43 起，发布的 whl **自带完整的 oneAPI 运行时**（包含 `dnnl.dll`、`mkl_*.dll`、`tbb12.dll`、`libomp140.x86_64.dll` 等），因此部署目标机 **无需预先安装 oneAPI** 即可直接使用 SYCL 加速。（使用 0.3.43+ 自包含 whl 时，可跳过下方「前置要求」中的 oneAPI 安装步骤。）
+自 0.3.45 起，发布的 whl 采用**方案 A（精简版）**：**不包含** oneAPI 运行时 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll` 均已移除），whl 体积约 36 MB。因此部署目标机 **必须预先安装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
 
-### 3. 已安装 oneAPI Toolkit 的用户可精简（可选）
+> **⚠️ 注意**：`libomp140.x86_64.dll` **保留在 whl 中**（OpenMP 预加载修复依赖），不可删除。
 
-若目标机上 **已经安装了** Intel oneAPI Base Toolkit（或 Deep Learning Essentials），whl 内打包的 oneAPI 运行时 DLL 是冗余的，可手动删除以节省磁盘空间：
+若目标机未安装 oneAPI，SYCL 运行时无法加载，推理会失败。请先按下方「前置要求」安装 oneAPI Base Toolkit。
 
-- 目录：`your_python\Lib\site-packages\llama_cpp\lib\`
-- 可删除的文件：
-  - `dnnl.dll`
-  - `mkl_core.3.dll`
-  - `mkl_sycl_blas.6.dll`
-  - `mkl_tbb_thread.3.dll`
-  - `tbb12.dll`
-  - （`libomp140.x86_64.dll` 若系统已通过 VS / oneAPI 提供 OpenMP，亦可删除）
+### 3. 已安装 oneAPI Toolkit 的用户（默认即精简版，无需再删）
 
-> 删除后，运行时将通过目标机已安装的 oneAPI（经 `setvars.bat` 或系统 PATH）提供这些 DLL。请确保 oneAPI 已正确安装并加载，否则会因缺少运行时而加载失败。
+方案 A 的 whl 本身已不含 oneAPI 冗余 DLL，目标机安装 oneAPI 后这些运行时由 oneAPI 经 `setvars.bat` 或系统 PATH 提供。whl 内仅保留 `libomp140.x86_64.dll`（必需）。
+
+> 若你从旧版（0.3.43/0.3.44 自包含 whl）升级，site-packages 里可能残留旧版 oneAPI DLL，建议先 `pip uninstall` 清理再装新版。
 
 ### 4. PR #25880 补丁：修复 SYCL onednn fattn 长上下文乱码
 
@@ -180,6 +192,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | 版本 | 文件 | 大小 |
 |------|------|------|
+| 0.3.48 | `llama_cpp_python-0.3.48+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
 | 0.3.47 | `llama_cpp_python-0.3.47+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
 | 0.3.46 | `llama_cpp_python-0.3.46+sycl-cp313-cp313-win_amd64.whl` | ~35 MB |
 | 0.3.45 | `llama_cpp_python-0.3.45+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
@@ -345,7 +358,7 @@ custom_nodes\sycl-preloader\
 | `n_ctx` | `4096` |
 | `n_threads` | `4` |
 | `n_threads_batch` | `4` |
-| `ctx_checkpoints` | `0`（禁用；混合架构模型如 Qwen3.5 必须设置） |
+| `ctx_checkpoints` | `-1`（默认；混合架构模型如 Qwen3.5 用默认即可，**勿设 `0`**——0.3.48+ 会触发 hybrid fast-path 首 decode 崩溃） |
 | `vision_image_min_tokens` | `1024`（Qwen-VL 最低要求） |
 | `vision_image_max_tokens` | `-1`（使用默认值） |
 

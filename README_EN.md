@@ -8,30 +8,47 @@ Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) wh
 
 ---
 
-## Latest Release Notes (v0.3.47+sycl · 2026-08-16)
+## Latest Release Notes (v0.3.48+sycl · 2026-08-22)
 
-**Key highlight: Measured performance +15%, fastest version to date**
+**Key highlight: Stateful MTP speculative decoding + zero local patches**
 
-- Upgraded to llama-cpp-python **0.3.47** (llama.cpp `ad1de39e`, zero local patches — #25880 natively merged upstream)
-- **MTMD Pocket TTS audio bindings**: audio-generation experimental line continues (still binding-level only; high-level workflows await upstream stabilization)
-- **Multi-output backend sampler API** + custom-sampler hook fixes
-- **Model reset fix** (`reset()` now fully clears model state)
+- Upgraded to llama-cpp-python **0.3.48** (based on JamePeng release commit `7562297`, llama.cpp `bb4caa754`, zero local patches — #25880 natively merged upstream)
+- **Stateful MTP Speculative Decoding**: `LlamaSpecEngine` lifecycle + `SpecConfig` / `SpeculativeType` landed; **BREAKING** removal of old `LlamaPromptLookupDecoding`, NGram on new lifecycle. Recommended `draft_n_max=2` for Qwen3.8 27B; MTP currently text / single-sequence only
+- **fix(mtmd) ctypes pointer binding fix**: `unsigned char *` changed from `c_char_p` to `POINTER(c_uint8)`
 
-**🚀 Measured performance on B580 (Qwen3-VL vision model):**
+**⚠️ BREAKING: `GenericMTMDChatHandler` constructor signature changed (0.3.48)**
+
+```python
+# 0.3.47
+GenericMTMDChatHandler(clip_model_path=...)
+# 0.3.48
+GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)
+```
+
+`chat_format` may be `None` (auto-resolved); `mmproj_path` is a **required positional argument**. Downstream plugin / script authors must adapt.
+
+**⚠️ Known integration note: hybrid vision model + `ctx_checkpoints=0` first-decode crash**
+
+- Symptom: hybrid vision models with SWA layers (e.g. Qwen3.5), on large images (~4000+ vision tokens), prefill succeeds but **first decode token crashes** (`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`)
+- Root cause: caller passing `ctx_checkpoints=0` forces the hybrid model down a "Bypassing rollback" fast-path that has no slot headroom for the first decode token on large prefills. This surfaces stably in 0.3.48+
+- Workaround: use default `ctx_checkpoints=-1` (enables checkpoint cache, avoids the broken branch). ComfyUI-sg-llama-cpp fork fixed default to `-1` in `1f0fc15` with a reactive `n_ctx` hint
+- **This wheel has no such bug**: pure `llama_cpp.Llama` on the same model + large image at `n_ctx=8192` verified working (double-checked)
+
+**🚀 Measured performance on B580 (Qwen3-VL vision model, 0.3.47 baseline):**
 
 | Metric | 0.3.45 | 0.3.47 | Change |
 |--------|--------|--------|--------|
 | Generation speed | 72.74 / 72.88 t/s | **83.61 t/s** | **+15%** |
 | Warm-start total time | 33.28s | **25.75s** | 7.5s faster |
 
-> 0.3.46 has no recorded perf data, so the baseline is 0.3.45.
+> 0.3.48 perf baseline TBD; 0.3.46 has no recorded perf data, so the baseline is 0.3.45.
 
 **Community feedback:**
 
 > ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** — vision model compatibility confirmed
 > See: https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
 
-**Wheel**: `llama_cpp_python-0.3.47+sycl-cp313-cp313-win_amd64.whl` (~36 MB, slim build, requires oneAPI 2026.1)
+**Wheel**: `llama_cpp_python-0.3.48+sycl-cp313-cp313-win_amd64.whl` (~36 MB, slim build, requires oneAPI 2026.1)
 
 ---
 
@@ -46,7 +63,7 @@ Starting from version 0.3.39, llama-cpp-python introduced a major **MTMD (Multi-
 | Vision model loading | Manual `clip_model_path` handler injected into `Llama()` | `mmproj_path` passed directly to `Llama()`, handler created internally |
 | Vision handler class | Model-specific handlers (e.g. `Qwen3VLChatHandler`) | `GenericMTMDChatHandler` handles all vision models |
 | Handler parameter passing | Direct to handler constructor | Via `chat_handler_kwargs` dict |
-| Hybrid architecture models | No special handling | Requires `ctx_checkpoints=0` (e.g. Qwen3.5) |
+| Hybrid architecture models | No special handling | Use default `ctx_checkpoints=-1` (e.g. Qwen3.5); **do not pass `0`** — 0.3.48+ triggers hybrid fast-path first-decode crash |
 
 ### 2. Manual Cleanup Required for Users Upgrading from Pre-0.3.39
 
@@ -77,7 +94,7 @@ The original `comfyui-sg-llama-cpp` plugin does not support the 0.3.39+ MTMD rew
 Adaptation details:
 - **`clip_model_path` → `mmproj_path`**: Passed directly to `Llama()`, no manual handler creation
 - **`GenericMTMDChatHandler` parameter filtering**: Takes the union of `GenericMTMDChatHandler` ∪ `MTMDChatHandler` parameters, filtering out `force_reasoning`, `enable_thinking`, and other params not accepted in 0.3.39+
-- **Added `ctx_checkpoints` option** (default `0`): Required for hybrid architecture models (Qwen3.5 etc. Transformer+Mamba)
+- **Added `ctx_checkpoints` option** (default `-1`): hybrid architecture models (Qwen3.5 etc. Transformer+Mamba) use the default; **do not set `0`** — 0.3.48+ triggers hybrid fast-path first-decode crash
 - **`vision_image_min_tokens` default** changed from `-1` to `1024` (Qwen-VL minimum requirement)
 - **Removed invalid UI params**: `vision_enable_thinking`, `vision_force_reasoning`, `vision_add_vision_id`
 
@@ -178,6 +195,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | Version | File | Size |
 |---------|------|------|
+| 0.3.48 | `llama_cpp_python-0.3.48+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
 | 0.3.47 | `llama_cpp_python-0.3.47+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
 | 0.3.46 | `llama_cpp_python-0.3.46+sycl-cp313-cp313-win_amd64.whl` | ~35 MB |
 | 0.3.45 | `llama_cpp_python-0.3.45+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
@@ -344,7 +362,7 @@ This folder has no nodes, no dependencies, and will never be touched by ComfyUI 
 | `n_ctx` | `4096` |
 | `n_threads` | `4` |
 | `n_threads_batch` | `4` |
-| `ctx_checkpoints` | `0` (disabled; required for hybrid models like Qwen3.5) |
+| `ctx_checkpoints` | `-1` (default; hybrid models like Qwen3.5 use default, **do not set `0`** — 0.3.48+ triggers hybrid fast-path first-decode crash) |
 | `vision_image_min_tokens` | `1024` (Qwen-VL minimum requirement) |
 | `vision_image_max_tokens` | `-1` (use default) |
 
