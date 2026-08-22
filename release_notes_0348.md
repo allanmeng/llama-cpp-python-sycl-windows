@@ -2,11 +2,11 @@
 
 预编译 wheel，面向 **Windows + Intel Arc (SYCL / oneAPI)** 的 llama-cpp-python 0.3.48。
 
-## 上游 0.3.48 关键改动（JamePeng fork, commit `7562297`）
+## 核心亮点
 
-- **Stateful MTP 投机解码（Speculative Decoding）**：`LlamaSpecEngine` 生命周期 + `SpecConfig` / `SpeculativeType` 落地；**BREAKING** 移除旧 `LlamaPromptLookupDecoding`，NGram 走新生命周期。推荐 Qwen3.8 27B 起手 `draft_n_max=2`；MTP 目前仅文本 / 单序列。
-- **fix(mtmd) ctypes 指针绑定修正**：`unsigned char *` 从 `c_char_p` 改为 `POINTER(c_uint8)`。
-- **llama.cpp 同步**：`ggml-org/llama.cpp` commit `bb4caa754`（llama.cpp 0.2.0，2026-08-21）。
+- 升级至 llama-cpp-python **0.3.48**（JamePeng release commit `7562297`，llama.cpp `bb4caa754`，零本地补丁）
+- **Stateful MTP 投机解码**：`LlamaSpecEngine` 生命周期 + `SpecConfig` / `SpeculativeType` 落地；**BREAKING** 移除旧 `LlamaPromptLookupDecoding`，NGram 走新生命周期。推荐 Qwen3.8 27B 起手 `draft_n_max=2`；MTP 目前仅文本 / 单序列
+- **fix(mtmd) ctypes 指针绑定修正**：`unsigned char *` 从 `c_char_p` 改为 `POINTER(c_uint8)`
 
 ## ⚠️ BREAKING: `GenericMTMDChatHandler` 构造签名变更（0.3.48）
 
@@ -21,10 +21,10 @@ GenericMTMDChatHandler(chat_format, mmproj_path, verbose=True, ...)
 
 ## ⚠️ 已知集成注意：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃
 
-- 现象：Qwen3.5 等带 SWA 层的 hybrid 视觉模型，大图（约 4000+ vision tokens）下 prefill 正常，但**首 decode token 崩溃**（`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`）。
-- 根因：调用方传 `ctx_checkpoints=0` 会强制 hybrid 模型走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token。此问题在 0.3.48+ 稳定暴露。
-- 规避：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开缺陷分支）。ComfyUI-sg-llama-cpp fork 已在 `1f0fc15` 将默认改为 `-1` 并加响应式 `n_ctx` hint。
-- **本 wheel 本身无此 bug**：纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常。
+- 现象：Qwen3.5 等带 SWA 层的 hybrid 视觉模型，大图（约 4000+ vision tokens）下 prefill 正常，但**首 decode token 崩溃**（`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`）
+- 根因：调用方传 `ctx_checkpoints=0` 会强制 hybrid 模型走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token。此问题在 0.3.48+ 稳定暴露
+- 规避：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开缺陷分支）。ComfyUI-sg-llama-cpp fork 已在 `1f0fc15` 将默认改为 `-1` 并加响应式 `n_ctx` hint
+- **本 wheel 本身无此 bug**：纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常
 
 ## 打包方式：方案 A（精简版）
 
