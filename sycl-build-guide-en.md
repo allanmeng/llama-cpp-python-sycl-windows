@@ -138,17 +138,19 @@ F:\ComfyUI-aki-v3\python\python.exe -m pip install scikit-build-core==0.10.7
 **Method A: Update existing source**
 
 ```cmd
-cd F:\ComfyUI-aki-v3\llama-cpp-python
+cd D:\projects\llama-cpp-python-sycl-windows\llama-cpp-python
 git fetch
 git reset --hard origin/main
 git submodule update --init --recursive
 ```
 
+> ⚠️ Use your actual source path (this repo's test environment uses `D:\projects\llama-cpp-python-sycl-windows\llama-cpp-python`). After `git reset --hard`, run `git status` to confirm the working tree actually has files — `submodule update` sometimes only updates the index/HEAD without writing files to disk (many files show as "deleted"). In that case, `cd vendor\llama.cpp` and run `git reset --hard HEAD` to restore them.
+
 **Method B: Fresh clone**
 
 ```cmd
-git clone https://github.com/JamePeng/llama-cpp-python F:\ComfyUI-aki-v3\llama-cpp-python
-cd F:\ComfyUI-aki-v3\llama-cpp-python
+git clone https://github.com/JamePeng/llama-cpp-python D:\projects\llama-cpp-python-sycl-windows\llama-cpp-python
+cd D:\projects\llama-cpp-python-sycl-windows\llama-cpp-python
 git submodule update --init --recursive
 ```
 
@@ -185,8 +187,10 @@ F:\ComfyUI-aki-v3\python\python.exe -m pip install . --no-build-isolation --forc
 **Verify the version number:**
 
 ```cmd
-F:\ComfyUI-aki-v3\python\python.exe -c "import llama_cpp; print(llama_cpp.__version__)"
+F:\ComfyUI-aki-v3\python\python.exe -m pip show llama_cpp_python
 ```
+
+> ⚠️ Use `pip show` instead of `import llama_cpp` to print the version: in a bare CLI, `import llama_cpp` may fail with `Failed to load 'ggml-base'` (misleading) because the SYCL runtime DLLs are not loaded. `pip show` reads package metadata directly and is unaffected by DLL loading.
 
 **Verify the vision modules (JamePeng fork specific):**
 

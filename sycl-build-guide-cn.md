@@ -138,17 +138,19 @@ F:\ComfyUI-aki-v3\python\python.exe -m pip install scikit-build-core==0.10.7
 **方式 A：更新已有源码**
 
 ```cmd
-cd F:\ComfyUI-aki-v3\llama-cpp-python
+cd D:\projects\llama-cpp-python-sycl-windows\llama-cpp-python
 git fetch
 git reset --hard origin/main
 git submodule update --init --recursive
 ```
 
+> ⚠️ 源码路径以你的实际位置为准（本仓库测试环境在 `D:\projects\llama-cpp-python-sycl-windows\llama-cpp-python`）。`git reset --hard` 后记得 `git status` 核对工作树是否真的有文件——`submodule update` 偶尔只更新 index/HEAD 而工作树文件没落盘（表现为大量文件显示"被删"），此时进入 `vendor/llama.cpp` 执行 `git reset --hard HEAD` 写回即可。
+
 **方式 B：全新克隆**
 
 ```cmd
-git clone https://github.com/JamePeng/llama-cpp-python F:\ComfyUI-aki-v3\llama-cpp-python
-cd F:\ComfyUI-aki-v3\llama-cpp-python
+git clone https://github.com/JamePeng/llama-cpp-python D:\projects\llama-cpp-python-sycl-windows\llama-cpp-python
+cd D:\projects\llama-cpp-python-sycl-windows\llama-cpp-python
 git submodule update --init --recursive
 ```
 
@@ -172,7 +174,7 @@ set CMAKE_GENERATOR=Ninja
 set CMAKE_ARGS=-DCMAKE_BUILD_TYPE=Release -DGGML_SYCL=on -DGGML_ONEDNN=off -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icx -DGGML_SYCL_TARGET=INTEL -Wno-dev
 ```
 
-> `-DGGML_ONEDNN=off` 仅关闭 CPU 通用后端的 oneDNN 优化（见 5.3 说明），不影响 SYCL 后端的 oneDNN flash-attention（默认开启）。
+> `-DGGML_ONEDNN=off` 仅关闭 CPU 通用后端的 oneDNN 优化（见 5.2 说明），不影响 SYCL 后端的 oneDNN flash-attention（默认开启）。
 
 ### 3.7 编译安装
 
@@ -185,8 +187,10 @@ F:\ComfyUI-aki-v3\python\python.exe -m pip install . --no-build-isolation --forc
 **验证版本号：**
 
 ```cmd
-F:\ComfyUI-aki-v3\python\python.exe -c "import llama_cpp; print(llama_cpp.__version__)"
+F:\ComfyUI-aki-v3\python\python.exe -m pip show llama_cpp_python
 ```
+
+> ⚠️ 用 `pip show` 而非 `import llama_cpp` 打印版本：裸 CLI 下 `import llama_cpp` 可能因 SYCL 运行时 DLL 未加载报 `Failed to load 'ggml-base'`（误导性错误）。`pip show` 直接读元数据，不受 DLL 加载影响。
 
 **验证视觉模块（JamePeng 分支特有）：**
 
