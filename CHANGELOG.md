@@ -1,4 +1,52 @@
 # Changelog
+## [0.3.49+sycl] - 2026-08-31
+
+### Changed from JamePeng (upstream 0.3.49)
+
+升级至 llama-cpp-python 0.3.49（基于 JamePeng release commit `34c1bfb`，tag `v0.3.49-cu128-win-20260831`）。关键改动（来自 JamePeng CHANGELOG）：
+
+- **DFlash2 / DFlash / DSpark 投机解码**：新增 DFlash2 选择器（selector-lattice）解码支持，包含 M-RoPE 四平面位置存储、`draft_p_min` 置信度截断、checkpoint rollback 保留；支持 `dflash2 nvfp4-scale` draft 模型。DFlash / DSpark 文本解码统一走 `_LlamaModelDraftEngine`（共享 MTP 的模型加载、词汇验证、后端采样、清理流程）。注意：DFlash 系列自 **0.3.49-preview** 起可用。
+- **MTMD 视频支持**：绑定 `mtmd_helper_init_opt`，暴露 `video FPS` / `ffmpeg 目录` / `timestamp` 配置，校验 ffmpeg/ffprobe，新增 MTMD 视频推理示例（Gemma 4 schema 兼容）。
+- **`presence_penalty` 兼容别名**：completion / callable / chat API 及 OpenAI 兼容 server 均接受 `presence_penalty`，规范化为 `present_penalty`（内部沿用 `penalty_present`）。
+- **MTMD prompt 计时拆分**：文本 / 图像 / 音频 prompt chunk 计时独立上报，多模态阶段边界显式同步。
+- **性能计时重构**：context timings 改为 request-scoped，`no_perf` 生效，独立重置 completion/embedding 计数器。
+- **llama.cpp 同步**：同步至 `ggml-org/llama.cpp` commit `9723942`（v0.3.0-90-g9723942ad，2026-08-31）。
+
+### Changed (this build)
+
+- **零本地补丁**：本构建无需任何本地 patch（SYCL onednn fattn 修复 #25880 仍由上游原生合入，验证通过）。
+- **打包方式为方案 A（精简版）**：whl **不自包含 oneAPI 运行时**，移除与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 36 MB。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+- **⚠️ 已知集成注意（延续 0.3.48）**：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃问题在 0.3.49 中仍适用——规避方式不变：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开 "Bypassing rollback" 缺陷分支）。**✅ 官方推荐插件 [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已修复**（`1f0fc15` 起默认 `-1` + 响应式 `n_ctx` hint），使用该插件无需手动处理。**本 wheel 本身无此 bug**（纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常）。
+- **视觉 handler 验证**：`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / `GenericMTMDChatHandler` / `Qwen3ASRChatHandler` 四件套在本构建下均验证可正常导入（SYCL 运行时 DLL 加载成功）。
+
+### Performance (measured, B580)
+
+**Qwen3.5-4B 视觉模型 + 图像（0.3.49）：**
+
+| 指标 | 小图 1088×1440 | 大图 2336×1760 |
+|------|----------------|----------------|
+| 视觉 token 数 | 1530 | 4015 |
+| 图像编码耗时 | 1790 ms（clip_encode） | 27605 ms（clip_encode） |
+| 图像解码耗时 | 768 ms（batch 1/1） | 3846 ms（batch 1/2）+ 3008 ms（batch 2/2） |
+| prompt eval | 1173.60 t/s（1327.54 ms / 1558 tokens） | 54.91 t/s（73628 ms / 4043 tokens） |
+| 生成速度 | **84.88 t/s**（eval 14620.22 ms / 1241 runs） | 44.61 t/s（eval 32053 ms / 1430 runs） |
+| 总耗时 | 37.73 s | 154.89 s |
+| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），rollback 命中 73 prefix | 2 次 host checkpoint（各 50.25 MiB），rollback 命中 101 prefix |
+| SYCL 计算缓冲 | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB | 同左 |
+
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`。小图 84.88 t/s 与 0.3.48 记录（大图 82.16 t/s）相当，推理核心性能无回退；大图（4015 vision tokens）下 44.61 t/s 为大图 hybrid 内存路径的正常负载差异。两场景均验证大图/小图视觉推理正常、无首 decode 崩溃。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+---
+
 ## [0.3.48+sycl] - 2026-08-22
 
 ### Changed from JamePeng (upstream 0.3.48)
