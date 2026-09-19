@@ -8,44 +8,45 @@ Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) wh
 
 ---
 
-## Latest Release Notes (v0.3.49+sycl · 2026-08-31)
+## Latest Release Notes (v0.4.0+sycl · 2026-09-19)
 
-**Key highlight: DFlash2 / DFlash / DSpark speculative decoding + MTMD video support**
+**Key highlights: MTMD text-to-speech (TTS) + grammar improvements and speedups + runtime state reliability**
 
-- Upgraded to llama-cpp-python **0.3.49** (based on JamePeng release commit `34c1bfb`, llama.cpp `9723942`, zero local patches)
-- **DFlash2 / DFlash / DSpark Speculative Decoding**: DFlash2 selector (selector-lattice) decoding + M-RoPE position storage; DFlash / DSpark unified under `_LlamaModelDraftEngine` (DFlash family available since 0.3.49-preview)
-- **MTMD video support**: exposes `video FPS` / `ffmpeg directory` / `timestamp` options, validates ffmpeg/ffprobe, new video inference example
-- **`presence_penalty` compatibility alias**: accepted by completion / chat APIs and the OpenAI-compatible server
+- Upgraded to llama-cpp-python **0.4.0** (based on JamePeng release commit `5c83af7`, llama.cpp `60081bb` = b11046, **335 submodule commits**, zero local patches)
+- **MTMD text-to-speech (TTS)**: new `MTMDAudioGenerator` (with a new `MTMDBaseHandler` base class) supporting **Qwen3-TTS** and **Pocket TTS**; speaker reference audio plus model-specific language and sampling options; ships a CLI TTS demo and a Streamlit playground
+- **Grammar improvements**: `LlamaGrammar` now supports custom start rules and lazy triggers; JSON Schema conversion fixes (reference resolution, empty schemas, integer bounds, tool-parameter handling); conversion up to **16.2x faster** (200 optional properties 21.689 → 1.339 ms)
+- **Runtime state reliability**: `LlamaState` snapshots now carry token/score/logits data and validate model/context compatibility; hybrid checkpoint lifetime aligned with native state changes; `Llama.abort()` wired to native cancellation (returns `finish_reason="abort"`)
+- **SYCL backend gains** (335 llama.cpp commits): TOP_K now uses radix select (**supports k>32**), `rms_norm+mul+add` and residual-chain fusion, `ssm_conv` SiLU epilogue fusion, Q4_K multi-column MMVQ deduplication, oneDNN scratchpad pool-free ordering fix
 
-**⚠️ Known integration note (carried over from 0.3.48): hybrid vision model + `ctx_checkpoints=0` first-decode crash**
+**⚠️ Known integration note (carried over from 0.3.48 / 0.3.49): hybrid vision model + `ctx_checkpoints=0` first-decode crash**
 
 - Symptom: hybrid vision models with SWA layers (e.g. Qwen3.5), on large images (~4000+ vision tokens), prefill succeeds but **first decode token crashes** (`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`)
-- Root cause: caller passing `ctx_checkpoints=0` forces the hybrid model down a "Bypassing rollback" fast-path that has no slot headroom for the first decode token on large prefills. This surfaces stably in 0.3.48+
+- Root cause: caller passing `ctx_checkpoints=0` forces the hybrid model down a "Bypassing rollback" fast-path that has no slot headroom for the first decode token on large prefills. Verified against the source: this fast-path **still exists** in 0.4.0
 - Workaround: use default `ctx_checkpoints=-1` (enables checkpoint cache, avoids the broken branch)
 - **✅ Official recommended plugin fixed**: [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) changed the default to `-1` in `1f0fc15` with a reactive `n_ctx` hint; large-image vision inference now works normally. No manual handling needed when using this plugin
 - **This wheel has no such bug**: pure `llama_cpp.Llama` on the same model + large image at `n_ctx=8192` verified working (double-checked)
 
-**🚀 Measured performance on B580 (Qwen3.5-4B vision model + images, 0.3.49):**
+**🚀 Measured performance on B580 (Qwen3.5-4B vision model + images, 0.4.0):**
 
 | Metric | Small image 1088×1440 | Large image 2336×1760 |
 |--------|-----------------------|-----------------------|
 | Vision tokens | 1530 | 4015 |
-| Image encode time | 1790 ms (clip_encode) | 27605 ms (clip_encode) |
-| Image decode time | 768 ms (batch 1/1) | 3846 ms (batch 1/2) + 3008 ms (batch 2/2) |
-| Prompt eval | 1173.60 t/s (1327.54 ms / 1558 tokens) | 54.91 t/s (73628 ms / 4043 tokens) |
-| Generation speed | **84.88 t/s** (eval 14620.22 ms / 1241 runs) | 44.61 t/s (eval 32053 ms / 1430 runs) |
-| Total time | 37.73 s | 154.89 s |
+| Image encode time | 1771 ms (clip_encode) | 25899 ms (clip_encode) |
+| Image decode time | 759 ms (batch 1/1) | 3627 ms (batch 1/2) + 2850 ms (batch 2/2) |
+| Prompt eval | **1194.33 t/s** (1304.50 ms / 1558 tokens) | **57.70 t/s** (70067.12 ms / 4043 tokens) |
+| Generation speed | **86.27 t/s** (eval 18197.69 ms / 1570 runs) | **46.37 t/s** (eval 30798.45 ms / 1428 runs) |
+| Total time | 30.05 s | 143.40 s |
 | Hybrid checkpoint | 2 host checkpoints (50.25 MiB each), rollback hit 73 prefix | 2 host checkpoints (50.25 MiB each), rollback hit 101 prefix |
 | SYCL compute buffer | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB | same as left |
 
-> Test scene: Qwen3.5-4B-Uncensored + mmproj-BF16, hybrid architecture (with SWA layers), `ctx_checkpoints=-1`, `n_ctx=8192`. Small-image 84.88 t/s is on par with the 0.3.48 record (82.16 t/s) — no core performance regression; 44.61 t/s on the large image (4015 vision tokens) reflects normal load differences on the large-image hybrid memory path. Both scenes verify normal large/small-image vision inference with no first-decode crash.
+> Test scene: Qwen3.5-4B-Uncensored + mmproj-BF16, hybrid architecture (with SWA layers), `ctx_checkpoints=-1`, `n_ctx=8192`. Versus the equivalent 0.3.49 measurements: small-image generation 84.88 → **86.27 t/s**, prompt eval 1173.60 → **1194.33 t/s**; large-image generation 44.61 → **46.37 t/s**, prompt eval 54.91 → **57.70 t/s**. No regression in either scene, with a modest gain on both. Vision inference normal, no first-decode crash.
 
 **Community feedback:**
 
 > ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** — vision model compatibility confirmed
 > See: https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
 
-**Wheel**: `llama_cpp_python-0.3.49+sycl-cp313-cp313-win_amd64.whl` (~36 MB, slim build, requires oneAPI 2026.1)
+**Wheel**: `llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl` (~36 MB, slim build, requires oneAPI 2026.1)
 
 ---
 
@@ -75,7 +76,7 @@ pip uninstall llama-cpp-python -y
 #### Step 2: Install the New Wheel
 
 ```bat
-pip install llama_cpp_python-0.3.49+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl
 ```
 
 #### Step 3: Update Your ComfyUI Plugin
@@ -114,24 +115,19 @@ Starting from 0.3.43, the build environment was upgraded to **Intel oneAPI Base 
 
 > **Important**: If your ComfyUI / inference environment uses the PyTorch XPU stack, make sure `intel-xpu-backend-for-pytorch` is **≥ 2.13** to stay consistent with the 0.3.43 oneAPI 2026 build.
 
-### 2. Wheels bundle the oneAPI runtime (self-contained deployment)
+### 2. Wheel packaging: Option A (slim build, no oneAPI runtime bundled)
 
-Starting from 0.3.43, the published wheels **bundle the full oneAPI runtime** (including `dnnl.dll`, `mkl_*.dll`, `tbb12.dll`, `libomp140.x86_64.dll`, etc.), so the target machine **does NOT need oneAPI pre-installed** to use SYCL acceleration. (When using a 0.3.43+ self-contained wheel, you may skip the oneAPI installation step in the Prerequisites section below.)
+Starting from 0.3.45, the published wheels use **Option A (slim)**: oneAPI runtime DLLs are **NOT bundled** (`dnnl.dll`, `mkl_core.3.dll`, `mkl_sycl_blas.6.dll`, `mkl_tbb_thread.3.dll`, `tbb12.dll` are all removed), keeping the wheel at ~36 MB. The target machine therefore **MUST have Intel oneAPI pre-installed** (the SYCL core runtime `sycl9.dll` / `OpenCL.dll` and the numeric libraries above are provided by oneAPI).
 
-### 3. Optional slimming for machines that already have oneAPI Toolkit
+> **⚠️ Note**: `libomp140.x86_64.dll` **IS kept** in the wheel (the OpenMP preload fix depends on it) — do not delete it.
 
-If the target machine **already has** Intel oneAPI Base Toolkit (or Deep Learning Essentials) installed, the oneAPI runtime DLLs bundled in the wheel are redundant and can be deleted manually to save disk space:
+If oneAPI is not installed on the target machine, the SYCL runtime cannot load and inference will fail. Install the oneAPI Base Toolkit as described in the Prerequisites section below.
 
-- Directory: `your_python\Lib\site-packages\llama_cpp\lib\`
-- Files you may delete:
-  - `dnnl.dll`
-  - `mkl_core.3.dll`
-  - `mkl_sycl_blas.6.dll`
-  - `mkl_tbb_thread.3.dll`
-  - `tbb12.dll`
-  - (`libomp140.x86_64.dll` can also be removed if OpenMP is already provided by VS / oneAPI on the system)
+### 3. For machines that already have the oneAPI Toolkit (no manual slimming needed)
 
-> After deletion, the runtime will be provided by the already-installed oneAPI (via `setvars.bat` or system PATH). Make sure oneAPI is correctly installed and loaded, otherwise the library will fail to load due to missing runtime.
+The Option A wheel contains no redundant oneAPI DLLs by design; once oneAPI is installed on the target machine, those runtimes are provided by oneAPI via `setvars.bat` or the system PATH. The wheel keeps only `libomp140.x86_64.dll` (required).
+
+> If you are upgrading from an older version (0.3.43/0.3.44 self-contained wheels), stale oneAPI DLLs may remain in site-packages — run `pip uninstall` first, then install the new version.
 
 ### 4. PR #25880 Patch: Fix SYCL onednn fattn Long-Context Corruption
 
@@ -165,7 +161,8 @@ The SYCL runtime depends on Intel oneAPI. You do **not** need to install the ful
 
 | Component | Why needed |
 |-----------|-----------|
-| Intel oneAPI DPC++/C++ Compiler | Provides `sycl8.dll`, `OpenCL.dll` runtime |
+| Intel oneAPI DPC++/C++ Compiler | Provides the SYCL compiler (icx) and `OpenCL.dll` |
+| Intel oneAPI DPC++ Library | Provides `sycl9.dll` runtime (oneAPI 2026.1) |
 | Intel oneAPI Math Kernel Library (oneMKL) | Provides MKL SYCL runtime |
 | Intel oneAPI Deep Neural Network Library (oneDNN) | Provides `dnnl.dll` |
 | Intel oneAPI Threading Building Blocks (oneTBB) | Provides `tbb12.dll` |
@@ -173,7 +170,7 @@ The SYCL runtime depends on Intel oneAPI. You do **not** need to install the ful
 Download Intel oneAPI Base Toolkit (select individual components during install):
 https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-download.html
 
-> **Tip:** During installation, choose "Custom Installation" and select only the 4 components listed above to save disk space.
+> **Tip:** During installation, choose "Custom Installation" and select only the components listed above to save disk space. In oneAPI 2025+, **DPC++ Library** is a component separate from the Compiler and must be ticked individually.
 
 ---
 
@@ -192,6 +189,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | Version | File | Size |
 |---------|------|------|
+| 0.4.0 | `llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
 | 0.3.49 | `llama_cpp_python-0.3.49+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
 | 0.3.48 | `llama_cpp_python-0.3.48+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
 | 0.3.47 | `llama_cpp_python-0.3.47+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
@@ -219,7 +217,7 @@ Download from [Releases](https://github.com/allanmeng/llama-cpp-python-sycl-wind
 
 ```bat
 pip uninstall llama-cpp-python -y
-pip install llama_cpp_python-0.3.49+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl
 ```
 
 Uninstalling first ensures a clean state.
@@ -259,7 +257,7 @@ call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" --force
 
 ### Create a dedicated preloader plugin
 
-> **Note (since 0.3.43)**: The 0.3.43 wheel bundles the oneAPI runtime and, on importing `llama_cpp`, automatically registers its own `lib/` directory into the DLL search path (inheriting the upstream 0.3.42 Windows DLL search fix). Therefore **in most cases, the `sycl-preloader` plugin is no longer needed in ComfyUI**. The content below is kept for users who need to support 0.3.42 and earlier, or custom deployment scenarios.
+> **Note (since 0.3.45)**: The wheel uses Option A (slim) and **no longer bundles** the oneAPI runtime DLLs; it still automatically registers its own `lib/` directory, and the target machine must have oneAPI pre-installed (see "Wheel packaging" above).
 
 To enable SYCL GPU acceleration for all llama-cpp-python based nodes in ComfyUI, create a dedicated preloader plugin.
 
@@ -368,7 +366,7 @@ This folder has no nodes, no dependencies, and will never be touched by ComfyUI 
 
 ## Known Limitations
 
-- Flash Attention is not supported by SYCL0 (Intel Arc), memory usage will be higher than CUDA
+- Flash Attention on SYCL0 (Intel Arc) is implemented via the **oneDNN path** (`GGML_SYCL_DNNL`, enabled by default): on B-series (B580/B70, etc.) `GGML_SYCL_ENABLE_FLASH_ATTN` / `GGML_SYCL_FA_ONEDNN` / `GGML_SYCL_ENABLE_MKL_FA` are all enabled in practice; upstream gates oneDNN features off on **A-series (Alchemist)**, where this path is unavailable. Either way, memory usage is higher than with CUDA
 - Some CLIP graph operators fall back to CPU, vision encoding performance is suboptimal
 - Qwen3.5-2B (Hybrid/Recurrent architecture) may cause instability, use Qwen3-2B instead
 
@@ -382,7 +380,7 @@ This folder has no nodes, no dependencies, and will never be touched by ComfyUI 
 | Driver | Latest |
 | OS | Windows 11 x64 |
 | Python | 3.13.11 |
-| oneAPI | 2025.3.2 |
+| oneAPI | 2026.1 |
 | ComfyUI | 0.16.3 |
 
 ---

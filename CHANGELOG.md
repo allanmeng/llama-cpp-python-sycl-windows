@@ -1,4 +1,61 @@
 # Changelog
+## [0.4.0+sycl] - 2026-09-19
+
+> 本版为**主版本号跃迁**（0.3.x → 0.4.0）。上游以 `0.4.0-Milestone` 发布，CHANGELOG 段头为 `[0.4.0-Milestone] MTMD Text-to-Speech, Grammar Improvements, and Runtime State Reliability`；`llama_cpp.__version__` 为 `0.4.0`。
+
+### Changed from JamePeng (upstream 0.4.0)
+
+升级至 llama-cpp-python 0.4.0（基于 JamePeng release commit `5c83af7`，tag `v0.4.0-cu128-win-20260919`；距 0.3.49 共 61 个提交）。关键改动（来自 JamePeng CHANGELOG）：
+
+- **MTMD 文本转语音（TTS）**：新增 `MTMDAudioGenerator`，并抽象出 `MTMDBaseHandler` 基类。支持 **Qwen3-TTS** 与 **Pocket TTS**；生成为自带 WAV 与 float32 PCM 结果；支持说话人参考音频、模型特定语言与采样选项；mmproj Flash Attention 配置独立于语言模型；生成音频做校验，失败或取消时释放资源；新增 CLI TTS 示例、Streamlit playground 与使用指南。
+- **Grammar：自定义 root 与 lazy trigger**：`LlamaGrammar.from_string()` / `from_file()` 可指定自定义起始规则；grammar 定义上保留不可变 regex 与 token-ID trigger 配置；lazy 配置转发到 native sampling；grammar 输入做校验，关闭后拒绝 sampler 操作；native grammar state 由每个 sampling context 独占持有。
+- **Grammar：JSON Schema 转换修复**：保留调用方 schema 所有权，正确解析引用与转义 JSON Pointer；改进空 schema、字符串/数组约束、整数边界、regex 转义、additional-property 名称排除；无效 count 与空 union/enum 在生成 GBNF 前即拒绝；空 `json_object` schema 规范化为显式 object schema；缺失/null/空 tool 参数视为"无声明属性的 object"。
+- **Grammar 转换性能**（上游基准中位数）：20 个可选属性 0.297 → 0.146 ms（2.0x）；100 个 4.889 → 0.646 ms（**7.6x**）；200 个 21.689 → 1.339 ms（**16.2x**）；Unicode 属性 1.8x；重复 regex 模式 2.1x。
+- **运行状态可靠性（`LlamaState`）**：随 native state 一并保存 committed token 数据、score 数组与 last logits；恢复前校验快照结构与 model/context 兼容性；不再依赖借用的 native logits 缓冲；快照无有效 last output 时拒绝立即采样；RAM/trie cache 计入 owned 数组。
+- **Hybrid checkpoint 生命周期对齐 native 状态变更**：cache 通过 weakref 绑定所属 context；native 内存/状态变更后失效相关 checkpoint；host/device 两种模式下恢复前均拒绝陈旧 checkpoint；partial-state restore 与 attention suffix removal 作为一次操作；恢复后裁剪未来 checkpoint，native 恢复或后缀移除失败时失效相关历史；释放 native context 前先关闭已注册 cache。
+- **运行期 prompt 复用与状态清理**：扩展 prompt 且与整个存活 context 全匹配时只评估新增后缀（不再重复评估已缓存 token）；复用 memory-only hybrid checkpoint 时要求 decode 后缀；仅在 native rollback 成功后才更新 Python token 游标；fatal decode / generation 错误后重置不确定状态；reset 或取消后不保存空 hybrid checkpoint。
+- **context 线程池管理与安全取消**：可附加/分离外部持有的 generation 与 batch 线程池；`Llama.abort()` 接通 native abort callback；区分 native decode abort 与致命错误并重置部分处理状态；取消的 completion / chat 响应返回 `finish_reason="abort"`；生成循环内 `KeyboardInterrupt` 作为取消处理；被中止的请求不再写入 prompt cache。
+- **投机解码与多模态修复**：DFlash 目标层特征直接经融合注入路径传递；遵循 sidecar causal-attention 元数据、校验 DSpark confidence-head 要求；draft 长度夹到训练块容量、device 恢复时重放特征；跳过重复位置的图像 embedding 批次；拒绝与目标验证不一致的高位 draft；拒绝来自其它引擎或过期捕获的 MTP / DFlash checkpoint。MTMD 侧：完成的 prefill 交给生成时不再把 media ledger ID 当文本解码；部分文本或媒体 prefill 失败后重置不确定状态；预处理/提交/分词/日志失败后释放媒体资源；绑定 `mtmd_input_part` 与 `mtmd_tokenize_from_parts`。
+- **embedding 重构**：`LlamaEmbedding.embed()` 委托给 `Llama.embed()`，同时保留子类默认值；embedding 执行开始与最终清理时重置 generation 状态；拒绝不成功的 decode 结果并在 native 内存被清理前复制输出。
+- **兼容性边界（重要）**：`LlamaState` **不是**可移植的序列化格式，也不是精确的随机续跑；带投机引擎加载 target state 需要一次全新的整 prompt 请求（`reset=True`），target-only 快照无法恢复 draft 状态；MTMD chat prefill 支持 `NGRAM_MAP_K` 与 `NGRAM_MAP_K4V`，但**仍拒绝 MTP 与 DFlash 系列引擎**；hybrid cache 通知只覆盖所属 context 上的包装操作，不覆盖任意裸 C 调用、SWA 自动驱逐或跨 context 共享 KV 变更。
+- **llama.cpp 同步**：`vendor/llama.cpp` 由 `9723942` 推进至 `60081bb`（llama.cpp `b11046`，2026-09-19；子模块跨 **335 个提交**）。SYCL 侧值得注意的收益：TOP_K 改用 radix select（支持 k>32）、`rms_norm+mul+add` 与 `add+add` 残差链融合、`ssm_conv` 融合 SiLU epilogue、Q4_K 多列 MMVQ 去冗余、oneDNN scratchpad 修复 pool free 顺序、B70 >19.3 GB 分配修复、Level Zero 直分配路径与 `GGML_SYCL_MEMTRACE` 显存归因、L2_NORM 批处理 kernel。
+
+### Changed (this build)
+
+- **零本地补丁**：本构建**未应用任何本地 patch**。核实结论：本地 `patches/25741-fattn-onednn-sync.patch` 与 `patches/25880-fattn-onednn-scale-uaf.patch` **均已作废**——上游已把 PR #25880 的正式修复（SDPA scale 改为 device scalar 缓冲 + kernel 写入，不再从栈局部做 async memcpy）合入 ggml-org；0.3.49 的 `9723942` 与 0.4.0 的 `60081bb` 中 `fattn-onednn.cpp` 的 `wait_and_throw()` 都只保留 `device_count > 1` 多卡分支，源码注释明确说明"此前归咎于缺失 sync 的乱码实为 scale use-after-return"。**后续发版不要再 apply 这两个 patch。**
+- **打包方式为方案 A（精简版）**：whl **不自包含 oneAPI 运行时**，移除与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 36 MiB。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+- **⚠️ 已知集成注意（延续 0.3.48 / 0.3.49）**：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃问题在 0.4.0 中**依然适用**——已核实 `llama.py` 中该 fast-path 分支（`self._hybrid_cache_mgr.max_checkpoints <= 0` 时打印 "Bypassing rollback/truncation"）在 0.4.0 中仍然存在。规避方式不变：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开该分支）。**✅ 官方推荐插件 [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已修复**（`1f0fc15` 起默认 `-1` + 响应式 `n_ctx` hint），使用该插件无需手动处理。**本 wheel 本身无此 bug**（纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常）。
+- **视觉 / 音频 / TTS handler 验证**：`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / `GenericMTMDChatHandler` / `Qwen3ASRChatHandler` / `MTMDBaseHandler` / `MTMDAudioGenerator` **六件套**在本构建下全部验证可正常导入（SYCL 运行时 DLL 加载成功）。注意：`MTMDBaseHandler` 与 `MTMDAudioGenerator` 仅在 `llama_cpp.llama_multimodal` 中导出，**`llama_chat_format` 未做重导出**，需从前者导入。
+- **SYCL 后端自检**：设备枚举正常（`Intel Arc B580 Graphics`，`level_zero:gpu:0`，SYCL 20.1，160 compute units，12526 MB，driver `1.15.39183+4`，Reorder 可用）；`GGML_SYCL_ENABLE_DNN=1`、`GGML_SYCL_FA_ONEDNN=1`、`GGML_SYCL_ENABLE_MKL_FA=1`，oneDNN flash-attention 路径正常开启。本版本新增可调环境变量：`GGML_SYCL_MEMTRACE` / `GGML_SYCL_MEMTRACE_STEP`、`GGML_SYCL_USE_LEVEL_ZERO_API`、`GGML_SYCL_GET_MEM_API`、`GGML_SYCL_ENABLE_HOST_PINNED_MEM`、`GGML_SYCL_HOST_PINNED_MEM_2G`。
+
+### Performance (measured, B580)
+
+**Qwen3.5-4B 视觉模型 + 图像（0.4.0）：**
+
+| 指标 | 小图 1088×1440 | 大图 2336×1760 |
+|------|----------------|----------------|
+| 视觉 token 数 | 1530 | 4015 |
+| 图像编码耗时 | 1771 ms（clip_encode） | 25899 ms（clip_encode） |
+| 图像解码耗时 | 759 ms（batch 1/1） | 3627 ms（batch 1/2）+ 2850 ms（batch 2/2） |
+| prompt eval | **1194.33 t/s**（1304.50 ms / 1558 tokens） | **57.70 t/s**（70067.12 ms / 4043 tokens） |
+| 生成速度 | **86.27 t/s**（eval 18197.69 ms / 1570 runs） | **46.37 t/s**（eval 30798.45 ms / 1428 runs） |
+| 总耗时 | 30.05 s | 143.40 s |
+| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），rollback 命中 73 prefix | 2 次 host checkpoint（各 50.25 MiB），rollback 命中 101 prefix |
+| SYCL 计算缓冲 | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB | 同左 |
+
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`。与 0.3.49 同类实测相比：小图生成 84.88 → **86.27 t/s**（+1.6%）、prompt eval 1173.60 → **1194.33 t/s**（+1.8%）；大图生成 44.61 → **46.37 t/s**（+3.9%）、prompt eval 54.91 → **57.70 t/s**（+5.1%）。**两场景均无性能回退，且有小幅提升**；视觉推理正常、无首 decode 崩溃，多轮 checkpoint 保存 / 清理正常。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+---
+
 ## [0.3.49+sycl] - 2026-08-31
 
 ### Changed from JamePeng (upstream 0.3.49)
