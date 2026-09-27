@@ -1,4 +1,60 @@
 # Changelog
+## [0.4.1+sycl] - 2026-09-27
+
+### Changed from JamePeng (upstream 0.4.1)
+
+升级至 llama-cpp-python 0.4.1（基于 JamePeng release commit `6332d8d`，tag `v0.4.1-cu128-win-20260926`；距 0.4.0 共 15 个提交）。关键改动（来自 JamePeng CHANGELOG）：
+
+- **MTMD 聊天模板媒体兼容性（本版主线）**：通用 MTMD handler 识别 **Muse Glimmer** 的 `<|patch|>` 图像标记；`Qwen3VLChatHandler` 渲染时注入 image / video URL 供 MTMD 处理；**`Qwen35ChatHandler` 启用视频输入**（接受字符串或 `{"url": ...}`）；为受支持的媒体输入格式补充回归测试。
+- **模型聊天模板延后到首次请求再解析**：不再把预编译的 fallback 当成显式模板，而是保留"未解析"状态到首次请求；解析后的模板在提取媒体标签前重新编译，使渲染、占位符规范化与额外模板参数使用同一个模板。
+- **解码位置结构体对齐 native ABI**：补回缺失的 `uint32 z` 字段，恢复 16 字节布局；更新类型注解与结构体文档；测试字段偏移、native 结构体返回与数组写入。（视觉推理相关修复）
+- **媒体评估失败给出可操作指引**：错误信息包含 native 错误码、起始位置、媒体 token 数、上下文大小与 batch 大小；视频请求建议降低帧采样与图像 token 上限，或增大上下文；说明视频选项应设在显式构造的 chat handler 上。
+- **注册标准 Jinja 模板 helper**：暴露 `raise_exception`（不支持的输入返回模板预期的错误信息，而非 undefined-function 报错）与 `strftime_now`（供使用日期格式化的模型模板）。
+- **扩展 ggml 后端 API bindings**：绑定 `ggml-backend.h` 中 device / buffer / tensor / graph / event / scheduler API；修正 device initializer 与 buffer base pointer 签名。
+- **文档对齐**：README 与 wiki 按内置 llama.cpp 实现校正（CUDA PDL 说明为运行时开关、以 `GGML_CUDA_CUBLAS_COMPUTE_TYPE` 取代过时的 cuBLAS 变量、移除已退役的 HIP rocWMMA 选项、**更正当前 SYCL Level Zero 与 oneDNN 变量名**），并明确 `n_gpu_layers=0` 只关闭模型层卸载、不保证所有算子绕开可用 GPU 后端。
+- **llama.cpp 同步**：`vendor/llama.cpp` 由 `60081bb` 推进至 `d834d44`（llama.cpp `b11195`，2026-09-26；子模块跨 **149 个提交**）。SYCL 侧值得注意的收益：**支持 sparse Flash Attention（#28796）**、扩展 MMVQ GLU 融合并新增 `rms_norm+scale` 与 `ssm_conv+silu` 融合（#28931）、MKL-FA softmax 合并加载（#28918）、pinned memory 使用正确 device context（#28895）、gemma4-26b-a4b FA shape 调优（#28450）、新增 `get_rows_back` 算子（#25266）、TOP_K 改用 radix select（支持 k>32）、gated DSV4_HC_PRE 与可选 HC_POST 组合矩阵（#29132）。
+
+### Changed (this build)
+
+- **零本地补丁**：本构建**未应用任何本地 patch**。本地 `patches/` 下的两个补丁**持续作废**（已再次核实：0.4.1 子模块 `d834d44` 中 `fattn-onednn.cpp` 相对 0.4.0 未变，`wait_and_throw()` 仍只保留 `device_count > 1` 多卡分支，上游 #25880 正式修复已内置）。**后续发版不要再 apply 这两个 patch。**
+- **打包方式为方案 A（精简版）**：whl **不自包含 oneAPI 运行时**，移除与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 37 MiB。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+- **⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0）**：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃问题在 0.4.1 中**依然适用**——已核实 `llama.py:2138-2144` 中该 fast-path 分支（`self._hybrid_cache_mgr.max_checkpoints <= 0` 时打印 "Bypassing rollback/truncation"）在 0.4.1 中仍然存在。规避方式不变：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开该分支）。**✅ 官方推荐插件 [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已修复**（`1f0fc15` 起默认 `-1` + 响应式 `n_ctx` hint），使用该插件无需手动处理。**本 wheel 本身无此 bug**（纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常）。
+- **视觉 / 音频 / TTS handler 验证**：`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / **`Qwen35ChatHandler`** / `GenericMTMDChatHandler` / `Qwen3ASRChatHandler` / `MTMDBaseHandler` / `MTMDAudioGenerator` **七件套**在本构建下全部验证可正常导入（SYCL 运行时 DLL 加载成功）。注意：`MTMDBaseHandler` 与 `MTMDAudioGenerator` 仅在 `llama_cpp.llama_multimodal` 中导出，**`llama_chat_format` 未做重导出**，需从前者导入。
+- **SYCL 后端自检**：设备枚举正常（`Intel Arc B580 Graphics`，`level_zero:gpu:0`，SYCL 20.1，160 compute units，12526 MB，driver `1.15.39183+4`，Reorder 可用）；`GGML_SYCL_ENABLE_DNN=1`、`GGML_SYCL_FA_ONEDNN=1`、`GGML_SYCL_ENABLE_MKL_FA=1`、`GGML_SYCL_ENABLE_FLASH_ATTN=1`，oneDNN flash-attention 路径正常开启。
+- **新增可调环境变量（SPARSE FA 三件套，默认全关，本构建未启用/未推荐）**：`GGML_SYCL_SPARSE_FA`（默认 `0`）、`GGML_SYCL_SPARSE_FA_DEBUG`（默认 `0`）、`GGML_SYCL_SPARSE_FA_MARGIN`（默认 `256`）。作用范围很窄：仅在**单 token decode**、且模型侧提供了 `n_kv_max` 提示（DSA / QSA / MSA 等稀疏注意力架构）、且压缩比 ≥ 2:1 时，才把 K/V gather 成紧凑缓冲后复用 dense FA kernel；普通 dense 模型（含 Qwen3.x 系列）不受影响。⚠️ 超出 `n_kv_max + margin` 容量的位置会被**静默丢弃**（结果错误而非报错），仅 `..._DEBUG=1` 会打印 `OVERFLOW`；且 `..._DEBUG=1` 每次调用会引入一次 device→host 同步，**仅用于诊断，勿长期开启**。
+
+### Performance (measured, B580)
+
+**Qwen3.5-4B 视觉模型 + 图像（0.4.1，热跑稳定态）：**
+
+| 指标 | 小图 1088×1440 | 大图 1792×2304 |
+|------|----------------|----------------|
+| 视觉 token 数 | 1530 | 4032 |
+| 图像编码耗时 | 1639 ms（clip_encode） | 10086 ms（clip_encode） |
+| 图像解码耗时 | 721 ms（batch 1/1） | 1063 ms（batch 1/2）+ 1358 ms（batch 2/2） |
+| prompt eval | **1266.65 t/s**（1230.02 ms / 1558 tokens） | **1404.81 t/s**（2890.07 ms / 4060 tokens） |
+| 生成速度 | **90.94 t/s**（eval 15900.85 ms / 1446 runs） | **86.64 t/s**（eval 17579.23 ms / 1523 runs） |
+| 总耗时 | 34.53 s | 40.43 s |
+| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），pos 73 / 1519 | 2 次 host checkpoint（各 50.25 MiB），pos 100 / 1623 |
+| SYCL 计算缓冲 | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB | 同左 |
+
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`。与 0.4.0 同类实测（同为第二次运行的热跑）相比：小图生成 86.27 → **90.94 t/s**（+5.4%）、prompt eval 1194.33 → **1266.65 t/s**（+6.1%）；图像编码 1771 → 1639 ms（−7.5%）、图像解码 759 → 721 ms（−5.0%）。**无性能回退，且有小幅提升**；视觉推理正常、无首 decode 崩溃，多轮 checkpoint 保存 / 清理正常。
+>
+> 读数说明：大图 prompt eval 的 t/s 高于小图，**主要来自批处理加成**（大图 4032 个视觉 token 按 `2048 + 1984` 两批喂入，小图 1530 为单批），不宜与小图直接横向比较。0.4.0 的大图记录为**冷跑**（load 63.2 s），与本表热跑口径不同，**不可跨版本横比**；本表大图所用图片（1792×2304）也与 0.4.0 大图（2336×1760）不同。
+>
+> 冷启动提示：模型刚加载后的**首次**运行含一次性开销（SYCL kernel JIT 编译），实测首次 prompt eval 约 25.75 t/s、生成约 45.52 t/s、`clip_encode` 约 16235 ms（同一张图热跑为 1639 ms），第二次运行即回到上表水平。这是首次运行的正常现象，不是性能回退。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+---
+
 ## [0.4.0+sycl] - 2026-09-19
 
 > 本版为**主版本号跃迁**（0.3.x → 0.4.0）。上游以 `0.4.0-Milestone` 发布，CHANGELOG 段头为 `[0.4.0-Milestone] MTMD Text-to-Speech, Grammar Improvements, and Runtime State Reliability`；`llama_cpp.__version__` 为 `0.4.0`。

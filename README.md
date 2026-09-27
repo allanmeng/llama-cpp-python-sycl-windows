@@ -10,45 +10,52 @@
 
 ---
 
-## 最新版本说明（v0.4.0+sycl · 2026-09-19）
+## 最新版本说明（v0.4.1+sycl · 2026-09-27）
 
-**核心亮点：MTMD 文本转语音（TTS）+ Grammar 改进与性能提升 + 运行状态可靠性**
+**核心亮点：MTMD 聊天模板兼容性 + 视觉/视频输入改进 + ggml 后端 API bindings 扩展**
 
-- 升级至 llama-cpp-python **0.4.0**（基于 JamePeng release commit `5c83af7`，同步 llama.cpp `60081bb` = b11046，子模块跨 **335 个提交**，零本地补丁）
-- **MTMD 文本转语音（TTS）**：新增 `MTMDAudioGenerator`（并抽象出 `MTMDBaseHandler` 基类），支持 **Qwen3-TTS** 与 **Pocket TTS**；可指定说话人参考音频、模型特定语言与采样选项；附带 CLI TTS 示例与 Streamlit playground
-- **Grammar 改进**：`LlamaGrammar` 支持自定义起始规则与 lazy trigger；JSON Schema 转换修复（引用解析、空 schema、整数边界、tool 参数处理）；转换性能最高提升 **16.2x**（200 个可选属性 21.689 → 1.339 ms）
-- **运行状态可靠性**：`LlamaState` 快照保存 token/score/logits 并校验 model/context 兼容性；hybrid checkpoint 生命周期与 native 状态变更对齐；`Llama.abort()` 接通 native 取消（返回 `finish_reason="abort"`）
-- **SYCL 后端收益**（llama.cpp 侧 335 个提交）：TOP_K 改用 radix select（**支持 k>32**）、`rms_norm+mul+add` 与残差链融合、`ssm_conv` 融合 SiLU epilogue、Q4_K 多列 MMVQ 去冗余、oneDNN scratchpad 修复 pool free 顺序
+- 升级至 llama-cpp-python **0.4.1**（基于 JamePeng release commit `6332d8d`，同步 llama.cpp `d834d44` = b11195，子模块跨 **149 个提交**，零本地补丁）
+- **MTMD 聊天模板媒体兼容性**：通用 MTMD handler 识别 **Muse Glimmer** 的 `<|patch|>` 图像标记；`Qwen3VLChatHandler` 渲染时注入 image / video URL；**`Qwen35ChatHandler` 启用视频输入**（接受字符串或 `{"url": ...}`）
+- **模型聊天模板延后到首次请求再解析**：不再把预编译 fallback 当成显式模板，改为首次请求时解析并重新编译，使渲染、占位符规范化与额外模板参数使用同一个模板
+- **解码位置结构体对齐 native ABI**：补回缺失的 `uint32 z` 字段，恢复 16 字节布局（视觉推理相关修复）
+- **媒体评估失败给出可操作指引**：错误信息包含 native 错误码、起始位置、媒体 token 数、上下文与 batch 大小；视频请求会建议降低帧采样 / 图像 token 上限，或增大上下文
+- **Jinja 模板 helper**：注册 `raise_exception` 与 `strftime_now`，模板内报错更准确
+- **ggml 后端 API bindings 扩展**：绑定 device / buffer / tensor / graph / event / scheduler
+- **SYCL 后端收益**（llama.cpp 侧 149 个提交）：**支持 sparse Flash Attention**、扩展 MMVQ GLU 融合并新增 `rms_norm+scale` 与 `ssm_conv+silu` 融合、MKL-FA softmax 合并加载、pinned memory 使用正确 device context、TOP_K 改用 radix select（**支持 k>32**）
 
-**⚠️ 已知集成注意（延续 0.3.48 / 0.3.49）：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃**
+**⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0）：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃**
 
 - 现象：Qwen3.5 等带 SWA 层的 hybrid 视觉模型，大图（约 4000+ vision tokens）下 prefill 正常，但**首 decode token 崩溃**（`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`）
-- 根因：调用方传 `ctx_checkpoints=0` 会强制 hybrid 模型走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token。经源码核实，该 fast-path 在 0.4.0 中**依然存在**
+- 根因：调用方传 `ctx_checkpoints=0` 会强制 hybrid 模型走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token。经源码核实，该 fast-path 在 0.4.1 中**依然存在**（`llama.py:2138-2144`）
 - 规避：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开缺陷分支）
 - **✅ 官方推荐插件已修复**：[comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已在 `1f0fc15` 将 `ctx_checkpoints` 默认改为 `-1` 并加响应式 `n_ctx` hint，大图视觉推理已恢复正常。使用此插件无需手动处理
 - **本 wheel 本身无此 bug**：纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常
 
-**🚀 B580 实测性能（Qwen3.5-4B 视觉模型 + 图像，0.4.0）：**
+**🚀 B580 实测性能（Qwen3.5-4B 视觉模型 + 图像，0.4.1）：**
 
-| 指标 | 小图 1088×1440 | 大图 2336×1760 |
+| 指标 | 小图 1088×1440 | 大图 1792×2304 |
 |------|----------------|----------------|
-| 视觉 token 数 | 1530 | 4015 |
-| 图像编码耗时 | 1771 ms（clip_encode） | 25899 ms（clip_encode） |
-| 图像解码耗时 | 759 ms（batch 1/1） | 3627 ms（batch 1/2）+ 2850 ms（batch 2/2） |
-| prompt eval | **1194.33 t/s**（1304.50 ms / 1558 tokens） | **57.70 t/s**（70067.12 ms / 4043 tokens） |
-| 生成速度 | **86.27 t/s**（eval 18197.69 ms / 1570 runs） | **46.37 t/s**（eval 30798.45 ms / 1428 runs） |
-| 总耗时 | 30.05 s | 143.40 s |
-| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），rollback 命中 73 prefix | 2 次 host checkpoint（各 50.25 MiB），rollback 命中 101 prefix |
+| 视觉 token 数 | 1530 | 4032 |
+| 图像编码耗时 | 1639 ms（clip_encode） | 10086 ms（clip_encode） |
+| 图像解码耗时 | 721 ms（batch 1/1） | 1063 ms（batch 1/2）+ 1358 ms（batch 2/2） |
+| prompt eval | **1266.65 t/s**（1230.02 ms / 1558 tokens） | **1404.81 t/s**（2890.07 ms / 4060 tokens） |
+| 生成速度 | **90.94 t/s**（eval 15900.85 ms / 1446 runs） | **86.64 t/s**（eval 17579.23 ms / 1523 runs） |
+| 总耗时 | 34.53 s | 40.43 s |
+| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），pos 73 / 1519 | 2 次 host checkpoint（各 50.25 MiB），pos 100 / 1623 |
 | SYCL 计算缓冲 | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB | 同左 |
 
-> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`。相较 0.3.49 同类实测：小图生成 84.88 → **86.27 t/s**、prompt eval 1173.60 → **1194.33 t/s**；大图生成 44.61 → **46.37 t/s**、prompt eval 54.91 → **57.70 t/s**，两场景均无回退且有小幅提升。视觉推理正常、无首 decode 崩溃。
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`，均为热跑稳定态。相较 0.4.0 同类实测（同为第二次运行的热跑）：小图生成 86.27 → **90.94 t/s**（+5.4%）、prompt eval 1194.33 → **1266.65 t/s**（+6.1%），无回退且有小幅提升；视觉推理正常、无首 decode 崩溃。
+>
+> 读数说明：大图 prompt eval 的 t/s 高于小图，主要来自**批处理加成**（大图 4032 个视觉 token 按 `2048 + 1984` 两批喂入，小图 1530 为单批），不宜与小图直接横比；0.4.0 的大图记录为冷跑且图片不同（2336×1760），**不可跨版本横比**。
+>
+> 冷启动提示：模型刚加载后的**首次**运行含一次性开销（SYCL kernel JIT 编译），实测首次 prompt eval 约 25.75 t/s、生成约 45.52 t/s、`clip_encode` 约 16235 ms（同图热跑为 1639 ms），第二次运行即回到上表水平——属正常现象，不是性能回退。
 
 **社区反馈：**
 
 > ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** —— 视觉模型兼容性良好
 > 详见：https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
 
-**安装包**：`llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl`（约 36MB，精简版，需预装 oneAPI 2026.1）
+**安装包**：`llama_cpp_python-0.4.1+sycl-cp313-cp313-win_amd64.whl`（约 37MB，精简版，需预装 oneAPI 2026.1）
 
 ---
 
@@ -78,7 +85,7 @@ pip uninstall llama-cpp-python -y
 #### 步骤 2：安装新版本 whl
 
 ```bat
-pip install llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.1+sycl-cp313-cp313-win_amd64.whl
 ```
 
 #### 步骤 3：更新 ComfyUI 插件
@@ -119,7 +126,7 @@ git clone https://github.com/allanmeng/comfyui-sg-llama-cpp
 
 ### 2. whl 打包方式：方案 A（精简版，不含 oneAPI 运行时）
 
-自 0.3.45 起，发布的 whl 采用**方案 A（精简版）**：**不包含** oneAPI 运行时 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll` 均已移除），whl 体积约 36 MB。因此部署目标机 **必须预先安装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+自 0.3.45 起，发布的 whl 采用**方案 A（精简版）**：**不包含** oneAPI 运行时 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll` 均已移除），whl 体积约 36–37 MB。因此部署目标机 **必须预先安装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
 
 > **⚠️ 注意**：`libomp140.x86_64.dll` **保留在 whl 中**（OpenMP 预加载修复依赖），不可删除。
 
@@ -191,6 +198,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | 版本 | 文件 | 大小 |
 |------|------|------|
+| 0.4.1 | `llama_cpp_python-0.4.1+sycl-cp313-cp313-win_amd64.whl` | ~37 MB |
 | 0.4.0 | `llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
 | 0.3.49 | `llama_cpp_python-0.3.49+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
 | 0.3.48 | `llama_cpp_python-0.3.48+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
@@ -219,7 +227,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 ```bat
 pip uninstall llama-cpp-python -y
-pip install llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.1+sycl-cp313-cp313-win_amd64.whl
 ```
 
 先 uninstall 再 install 是最干净的安装方式。
