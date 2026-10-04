@@ -171,10 +171,10 @@ rd /s /q "F:\ComfyUI-aki-v3\python\Lib\site-packages\llama_cpp_python-0.3.32.dis
 set VS2022INSTALLDIR=D:\Microsoft Visual Studio\2022\BuildTools
 "F:\Intel-oneAPI\setvars.bat" --force
 set CMAKE_GENERATOR=Ninja
-set CMAKE_ARGS=-DCMAKE_BUILD_TYPE=Release -DGGML_SYCL=on -DGGML_ONEDNN=off -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icx -DGGML_SYCL_TARGET=INTEL -Wno-dev
+set CMAKE_ARGS=-DCMAKE_BUILD_TYPE=Release -DGGML_SYCL=on -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icx -DGGML_SYCL_TARGET=INTEL -Wno-dev
 ```
 
-> `-DGGML_ONEDNN=off` 仅关闭 CPU 通用后端的 oneDNN 优化（见 5.2 说明），不影响 SYCL 后端的 oneDNN flash-attention（默认开启）。
+> SYCL 后端的 oneDNN flash-attention 由 CMake 选项 `GGML_SYCL_DNN` 控制（**默认 ON**，无需显式传入，详见 5.2）；编译时能找到 oneAPI 的 oneDNN 即自动定义 `GGML_SYCL_DNNL`。llama.cpp 中不存在 `GGML_ONEDNN` 选项，无需传入。
 
 ### 3.7 编译安装
 
@@ -276,13 +276,14 @@ pip install scikit-build-core==0.10.7
 
 如果不固定版本，可能会出现 CMake 配置失败或 wheel 构建异常。
 
-### 5.2 GGML_ONEDNN 参数说明
+### 5.2 SYCL oneDNN flash-attention 参数说明
 
-编译参数中设置了 `-DGGML_ONEDNN=off`，说明如下：
+SYCL 后端的 oneDNN flash-attention 由 CMake 选项 `GGML_SYCL_DNN` 控制：
 
-- `GGML_ONEDNN` 控制的是 **CPU 通用后端的 oneDNN 优化**（仅影响纯 CPU 推理），与 SYCL 后端无关
-- **SYCL 后端的 oneDNN flash-attention** 由另一个开关 `GGML_SYCL_DNN` 控制（默认开启），编译时若能找到 oneAPI 的 oneDNN 会自动启用 `GGML_SYCL_DNNL`，该路径是 SYCL 推理的最优性能路径
-- 因此不要为了"开启 onednn"去改 `GGML_ONEDNN`——它对 SYCL 推理没有任何影响，保持 `off` 即可
+- 该选项**默认 ON**，**无需在 `CMAKE_ARGS` 中显式传入**
+- 编译时若能找到 oneAPI 的 oneDNN（厂商与 `GGML_SYCL_TARGET` 匹配），会自动定义 `GGML_SYCL_DNNL` 并链接 `dnnl.dll`——这是 SYCL 推理的最优性能路径
+- **验证方式**：查 `ggml-sycl.dll` 的导入表是否含 `dnnl.dll`；不要用启动日志里的 `GGML_SYCL_DNNL: yes` 作判据（该行以 `#if defined()` 判断，而宏是无条件定义的，**恒为真**）
+- 历史提示：早期编译参数中曾带 `-DGGML_ONEDNN=off`，经核实 llama.cpp 全仓库**不存在** `GGML_ONEDNN` 这个 CMake 选项，属无效参数，已移除
 
 ### 5.3 编译生成器选择
 

@@ -171,10 +171,10 @@ rd /s /q "F:\ComfyUI-aki-v3\python\Lib\site-packages\llama_cpp_python-0.3.32.dis
 set VS2022INSTALLDIR=D:\Microsoft Visual Studio\2022\BuildTools
 "F:\Intel-oneAPI\setvars.bat" --force
 set CMAKE_GENERATOR=Ninja
-set CMAKE_ARGS=-DCMAKE_BUILD_TYPE=Release -DGGML_SYCL=on -DGGML_ONEDNN=off -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icx -DGGML_SYCL_TARGET=INTEL -Wno-dev
+set CMAKE_ARGS=-DCMAKE_BUILD_TYPE=Release -DGGML_SYCL=on -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icx -DGGML_SYCL_TARGET=INTEL -Wno-dev
 ```
 
-> `-DGGML_ONEDNN=off` only disables oneDNN optimization for the generic CPU backend (see 5.2); it does not affect the SYCL backend's oneDNN flash-attention (enabled by default).
+> The SYCL backend's oneDNN flash-attention is controlled by the CMake option `GGML_SYCL_DNN` (**ON by default**, no need to pass it — see 5.2); when oneAPI's oneDNN is found at build time, `GGML_SYCL_DNNL` is defined automatically. llama.cpp has no `GGML_ONEDNN` option, so there is nothing to pass.
 
 ### 3.7 Build and install
 
@@ -276,13 +276,14 @@ pip install scikit-build-core==0.10.7
 
 Without pinning, CMake configuration failures or abnormal wheel builds may occur.
 
-### 5.2 GGML_ONEDNN parameter notes
+### 5.2 SYCL oneDNN flash-attention parameter notes
 
-The build sets `-DGGML_ONEDNN=off`; explanation:
+The SYCL backend's oneDNN flash-attention is controlled by the CMake option `GGML_SYCL_DNN`:
 
-- `GGML_ONEDNN` controls **oneDNN optimization for the generic CPU backend** (only affects pure-CPU inference), unrelated to the SYCL backend
-- **The SYCL backend's oneDNN flash-attention** is controlled by a separate option `GGML_SYCL_DNN` (enabled by default); if oneAPI's oneDNN is found at build time, `GGML_SYCL_DNNL` is enabled automatically — this is the optimal performance path for SYCL inference
-- Therefore, do **not** change `GGML_ONEDNN` to "enable onednn" — it has no effect on SYCL inference; keep it `off`
+- The option is **ON by default** — **no need to pass it in `CMAKE_ARGS`**
+- If oneAPI's oneDNN is found at build time (vendor matches `GGML_SYCL_TARGET`), `GGML_SYCL_DNNL` is defined automatically and `dnnl.dll` is linked — this is the optimal performance path for SYCL inference
+- **How to verify**: check whether the import table of `ggml-sycl.dll` contains `dnnl.dll`; do not rely on the `GGML_SYCL_DNNL: yes` line in the startup log (it is guarded by `#if defined()`, while the macro is always defined, so it is **always true**)
+- Historical note: earlier build flags included `-DGGML_ONEDNN=off`; verification showed llama.cpp has **no** such CMake option — it was a no-op and has been removed
 
 ### 5.3 Build generator selection
 
