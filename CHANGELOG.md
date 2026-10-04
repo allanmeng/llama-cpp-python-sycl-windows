@@ -1,4 +1,63 @@
 # Changelog
+## [0.4.2+sycl] - 2026-10-04
+
+### Changed from JamePeng (upstream 0.4.2)
+
+升级至 llama-cpp-python 0.4.2（基于 JamePeng `528cf24`；距 0.4.1 的 `6332d8d` 共 **23 个提交**；上游 CHANGELOG 段头 `[0.4.2] RPC Device Selection and Extended Batch / Runtime Bindings`）。关键改动（来自 JamePeng CHANGELOG）：
+
+- **RPC 远程设备选择（本版主线）**：`Llama` 支持显式选择远端与本地设备；原生注册前先探测 RPC 端点并校验协议与设备数，进程级复用注册以避免重复分配厂商自有后端资源；校验设备顺序与张量切分、拒绝不支持的 row splitting，并在 native 模型清理完成前保留 device 指针数组。RPC 测试覆盖端点校验、注册复用、设备隔离、握手检查与资源生命周期。
+- **server 侧暴露本地设备选择**：新增 `rpc_local_devices` 模型设置并透传给 `Llama`；传空列表即可让服务端把模型层只放在选定的 RPC 设备上。
+- **扩展 batch API 与状态返回类型修正**：新增 `llama_batch_ext`、`llama_embd`、`llama_process_type`、`llama_process` 绑定（支持 token 与 embedding 输入）；session save/load 返回类型修正为 `bool`、sequence state size 修正为 `size_t`；补充 token / embedding 解码等价性与 batch 上限的回归测试。
+- **新增多张量 buffer 分配 API 绑定**：为 `ggml_backend_buft_alloc_buffer_n` 与 `ggml_backend_buft_get_alloc_size_n` 增加 ctypes 绑定。
+- **MTMD 后解码回调对齐 embedding batch API**：新增 `mtmd_helper_embd_batch` 结构体并把它的指针传给 `mtmd_helper_post_decode_callback`（取代此前按值传 `llama_batch`）。
+- **量化 / 训练参数 ABI 对齐**：`llama_model_quantize_params` 补 `max_buf_size`、`llama_opt_params` 补 `optimizer_type`；`llama_opt_init` 改为按值接收 `llama_opt_params`；optimizer 回调返回类型修正为按值返回 `ggml_opt_optimizer_params`。
+- **构建配置清理**：所有 CUDA / Metal wheel 构建启用 RPC；用 `CMAKE_BUILD_PARALLEL_LEVEL` 限制构建并行度；移除无用 CMake 选项与多余的 Metal 交叉编译标志；修正 Metal 产物名。另有 "Reuse native libraries during the Python wheel build process" 以缩短编译时间。
+- **文档**：README 改为指向 `docs/wiki` 作为维护中的文档源；新增 RPC 设置与多模态卸载指南（含 Qwen3.5 图像示例），并说明 **MTMD projector 独立于 RPC 模型设备列表选择自己的后端**。
+- **llama.cpp 同步**：`vendor/llama.cpp` 由 `d834d44` 推进至 `cb7934c`（llama.cpp `b11372`，2026-10-03；子模块跨 **178 个提交**）。SYCL 侧值得注意的收益：**Q8_0 DMMV ESIMD + MMVQ wide load（#29186）**、**D=512 FA vec kernel 启用大寄存器文件（#29062）**、**运行时探测 oneDNN 能力、无优化实现时整体退回 SYCL kernel，避免误用慢速 reference matmul / fattn（#28985）**、**FWHT 宽块 kernel（#29243）**、**tensor allreduce 改用 pinned host buffer 减少同步（#29604）**、buffer type 接口新增 `alloc_buffer_n`（#23671）。
+
+### Changed (this build)
+
+- **零本地补丁**：本构建**未应用任何本地 patch**（`patches/` 下两个补丁自 0.3.49 起已作废，上游已正式修复，**后续发版不要再 apply**）。
+- **打包方式为精简版（方案 A）**：whl **不自包含 oneAPI 运行时**，移除与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 37 MiB。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+- **与 0.4.1 逐条目对拍**：包内**唯一新增文件为 `llama_cpp/_rpc.py`**（对应上游 RPC 特性），无条目缺失；`ggml-sycl.dll` 由 67,144,192 B 变为 64,837,120 B，其余 DLL 小幅增大（上游 binding 与 native 库更新）。
+- **⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1）**：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃问题在 0.4.2 中**依然适用**（该 fast-path 分支仍在）。规避方式不变：`ctx_checkpoints` 用默认 `-1`。**✅ 官方推荐插件 [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已修复**（`1f0fc15` 起默认 `-1` + 响应式 `n_ctx` hint），使用该插件无需手动处理。**本 wheel 本身无此 bug**。
+- **视觉 / 音频 / TTS handler 验证**：`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / `Qwen35ChatHandler` / `GenericMTMDChatHandler` / `Qwen3ASRChatHandler` / `MTMDBaseHandler` / `MTMDAudioGenerator` 七件套在本构建下全部验证可正常导入。注意 `MTMDBaseHandler` 与 `MTMDAudioGenerator` 仅在 `llama_cpp.llama_multimodal` 中导出，**`llama_chat_format` 未做重导出**。
+- **SYCL 后端自检**：设备枚举正常（`Intel Arc B580 Graphics`，SYCL 20.1，160 compute units，12526 MB，Reorder 可用）；`GGML_SYCL_ENABLE_DNN=1`、`GGML_SYCL_FA_ONEDNN=1`，oneDNN flash-attention 路径正常开启，运行时探测未回退（无 `oneDNN has no optimized matmul` 告警）。
+
+### Performance (measured, B580)
+
+**Qwen3.5-4B 视觉模型 + 图像（0.4.2，热跑稳定态）：**
+
+| 指标 | 小图 864×1248 | 大图 1696×2464 |
+|------|----------------|----------------|
+| 视觉 token 数 | 1053 | 4081 |
+| 图像编码耗时 | 913 ms（clip_encode） | 11241 ms（clip_encode） |
+| 图像解码耗时 | 787 ms（batch 1/1） | 1140 ms（batch 1/2）+ 1465 ms（batch 2/2） |
+| prompt eval | **1022.37 t/s**（1057.35 ms / 1081 tokens） | **1307.20 t/s**（3143.37 ms / 4109 tokens） |
+| 生成速度 | **88.27 t/s**（eval 16425.96 ms / 1450 runs） | **84.28 t/s**（eval 17655.87 ms / 1488 runs） |
+| 总耗时 | 26.69 s | 42.02 s |
+| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），pos 67 / 1517 | 2 次 host checkpoint（各 50.25 MiB），pos 105 / 1593 |
+| SYCL 计算缓冲 | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB | 同左 |
+
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`，`n_batch=2048`，均为热跑稳定态（`load time` ≈ 125 ms）。
+>
+> **与 0.4.1 同图对照**（同一组图、同一会话内连续运行）：图像编码 913 ms（**完全一致**）、大图图像编码 11211 → 11241 ms、小图 prompt eval 1055.11 → 1022.37 t/s、大图 prompt eval 1316.58 → 1307.20 t/s、小图生成 88.22 → 88.27 t/s、大图生成 83.79 → 84.28 t/s —— **逐项吻合，无性能回退**。
+>
+> 读数说明：大图 prompt eval 的 t/s 高于小图，主要来自**批处理加成**（大图 4081 个视觉 token 按 `2048 + 2033` 两批喂入，小图 1053 为单批），不宜与小图直接横比。
+>
+> 冷启动提示：模型刚加载后的**首次**运行含一次性开销（SYCL kernel JIT 编译 + oneDNN primitive 创建），实测首次 prompt eval 426.23 t/s、生成 83.06 t/s、`clip_encode` 约 15969 ms（同图第二次运行降至 11241 ms），第二次运行即回到上表水平——属正常现象，不是性能回退。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
+---
+
 ## [0.4.1+sycl] - 2026-09-27
 
 ### Changed from JamePeng (upstream 0.4.1)
