@@ -1,4 +1,67 @@
 # Changelog
+## [0.4.3+sycl] - 2026-10-17
+
+### Changed from JamePeng (upstream 0.4.3)
+
+升级至 llama-cpp-python 0.4.3（基于 JamePeng `ce261d1`；距 0.4.2 的 `528cf24` 共 **26 个提交**；上游 CHANGELOG 段头 `[0.4.3] Multimodal Embeddings, MTP Image Speculation & Extended Batch / Audio Stream APIs`）。关键改动（来自 JamePeng CHANGELOG）：
+
+- **多模态嵌入（本版主线）**：新增 `MTMDEmbeddingHandler` 与 `LlamaEmbedding.embed_multimodal()`，**绕开 chat 模板**直接对文本 / 图像 / 音频做 pooled embedding；支持 marker 式 prompt 与有序 text/media 分段，兼容的媒体块自动 batch 并返回带 decoder 位置的 features；要求一次请求的全部输入装进**单个 decoder microbatch**。
+- **MTP 图像投机解码**：MTMD 图像对话可走 MTP 投机解码 —— 媒体子批次连同 positions 与 shift 后的 target hidden states 一起前传，target / draft 状态一起重建，prefill 失败可恢复；上游用 Qwen3.5-9B-MTP + mmproj 验证并附解码基准。
+- **投机解码相关修复**：**支持带 hidden states 与媒体位置的 MTP embedding 输入**；部分 device checkpoint 恢复后清理 attention KV；回滚时重放 pinned 媒体前缀；DFlash / DFlash2 最小长度检查提前到每次调用截断之前。
+- **`LlamaBatchExt` 新增 + context 资源管理加固**：支持文本 / embedding / 配对 MTP 输入与显式 batch range，经 `llama_process` 编解码；同步 graph 预留并校验维度；保留已挂载 LoRA adapter、拦截已关闭 context 的操作；错误上报前完成资源清理、防双重释放。
+- **batch 扩展支持独立 hidden states**：`LlamaBatchExt` 新增 `state` / `states` 参数与 `llama_batch_ext_set_embd_state`。
+- **嵌入相关修正**：`Llama.embed()` 改用 `n_embd_out` 读取而非 hidden 维度（修复 EmbeddingGemma 2 的 768 维投影输出被截断）；非因果嵌入 batch 限制到 `n_ubatch`（避免 native 断言并保住全上下文注意力）；归一化抽为共享工具（保持既有模式、bool 兼容与零向量语义）。
+- **多模态嵌入的注意力 / 位置契约修复**：保留模型注意力模式与标量文本位置，拒绝不支持的 chunk-local 注意力组合，防止 Lp 归一化过程中 float32 溢出，并补 Qwen3-VL 嵌入回归测试。
+- **API 绑定同步**：`Sync llama.cpp llama/mtmd/ggml API Binding 20261016`（上游标题中的 Audio Stream APIs 落在该项）。
+- **构建**：wheel 构建复用 native 库，上游 CI 由 3–4 小时降至 1.5–2 小时（仅影响其上 CI，不影响本机构建方式）。
+- **llama.cpp 同步**：`vendor/llama.cpp` 由 `cb7934c` 推进至 `27c7a76`（llama.cpp **`b11703`**，2026-10-16；子模块跨 **330 个提交**）。SYCL 侧 16 项，其中与 B580 / Q4_K 路径相关的收益：**Q4_K/Q5_K 权重反量化 wide stores（#29696）**、**Q5_K reorder-layout MMVQ 与融合 GLU（#29375）**、**delta-net alpha gate 融合（#29687）**、**mul_mat / split buffer / host pool 内存错误修复（#29889）**、**模型加载经 pinned ring buffer 批量上传（#29608）**、DMMV 行尾越界防护（#29338）；其余为 MXFP4 MoE 算术解码与权重重排（#29809）、IQ3 代码重排（#29107）、IQ3_S 多列 MMVQ（#29500）、reordered Q8_0 MoE（#29337）、分组 MoE XMX GEMM（#29245）、GLM MLA prefill 走 MKL FA（#29171）、混合 GPU FA 修复（#29071）、FWHT 优化（#29605）、`fattn_kv_buffers` 清理（#27689）、op 头文件重复宏清理（#29507）。
+
+### Changed (this build)
+
+- **零本地补丁**：本构建**未应用任何本地 patch**（`patches/` 下两个补丁自 0.3.49 起已作废，上游已正式修复，**后续发版不要再 apply**）。
+- **打包方式为精简版（方案 A）**：whl **不自包含 oneAPI 运行时**，移除与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 **39 MiB**。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+- **与 0.4.2 逐条目对拍**：包内 **Python 文件集合完全一致**（上游新增的 `MTMDEmbeddingHandler` 落在 `llama_multimodal.py`、`LlamaBatchExt` 落在 `_internals.py`，**无新增 .py 文件**）；DLL 变化为 `ggml-sycl.dll` 64,837,120 → **68,933,120 B**（+4.1 MB）、`llama.dll` +309,760 B、`llama-common.dll` +216,064 B、`mtmd.dll` +116,224 B。
+- **显存工作集略有增大**：同设置下 `SYCL0 compute buffer` 由 495.00 MiB 增至 **513.02 MiB**、`SYCL_Host` 由 18.02 MiB 增至 **28.03 MiB**（新增 kernel 的 workspace），`~llama_context` 两次仍 `matches expectation`，**非泄漏**；8192 上下文下建议多留约 18 MiB 显存。
+- **⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2）**：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃问题在 0.4.3 中**依然适用**（已核实该 fast-path 仍在 `llama.py:2174-2178`）。规避方式不变：`ctx_checkpoints` 用默认 `-1`。**✅ 官方推荐插件 [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已修复**（`1f0fc15` 起默认 `-1` + 响应式 `n_ctx` hint），使用该插件无需手动处理。**本 wheel 本身无此 bug**。
+- **视觉 / 音频 / TTS handler 验证**：`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / `Qwen35ChatHandler` / `GenericMTMDChatHandler` / `Qwen3ASRChatHandler` / `MTMDBaseHandler` / `MTMDAudioGenerator` 七件套在本构建下全部验证可正常导入。注意 `MTMDBaseHandler`、`MTMDAudioGenerator` 与新增的 `MTMDEmbeddingHandler` 仅在 `llama_cpp.llama_multimodal` 中导出，**`llama_chat_format` 未做重导出**。
+- **SYCL 后端自检**：设备枚举正常（`Intel Arc B580 Graphics`，SYCL 20.1，160 compute units，12526 MB，Reorder 可用）；`GGML_SYCL_ENABLE_DNN=1`、`GGML_SYCL_FA_ONEDNN=1`，oneDNN flash-attention 路径正常开启，运行时探测未回退（无 `oneDNN has no optimized matmul` 告警）。
+- **新增 3 个 SYCL 环境变量（均默认开启，纯调优）**：`GGML_SYCL_UPLOAD_STAGING_SLOTS`（默认 `4`）、`GGML_SYCL_XMX_GATHER_SHAPES`（默认 `0xff`）、`GGML_SYCL_XMX_GATHER_TYPES`（默认 `-1`，全开）。
+- **构建配置说明**：启动日志显示 `GGML_SYCL_DYNAMIC_PRECISION: F32` —— 因本构建**未定义 `GGML_SYCL_F16`**（上游 CMake 默认 OFF，与历版构建一致），源码走 F32 分支，XMX dequant-GEMM 路径不启用、library GEMM 保持 f32。此为本仓库一贯配置，非本版变更。
+
+### Performance (measured, B580)
+
+**Qwen3.5-4B 视觉模型 + 图像（0.4.3，热跑稳定态）：**
+
+| 指标 | 小图 1088×1440 | 大图 1792×2304 |
+|------|----------------|----------------|
+| 视觉 token 数 | 1530 | 4032 |
+| 图像编码耗时 | 1779 ms（clip_encode） | 11030 ms（clip_encode） |
+| 图像解码耗时 | 760 ms（batch 1/1） | 1129 ms（batch 1/2）+ 1439 ms（batch 2/2） |
+| prompt eval | **1212.81 t/s**（1284.62 ms / 1558 tokens） | **1331.59 t/s**（3048.99 ms / 4060 tokens） |
+| 生成速度 | **88.75 t/s**（eval 13295.33 ms / 1180 runs） | **85.59 t/s**（eval 17010.77 ms / 1456 runs） |
+| 总耗时 | 24.51 s | 40.58 s |
+| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），pos 73 / 1253 | 2 次 host checkpoint（各 50.25 MiB），pos 100 / 1556 |
+| SYCL 计算缓冲 | SYCL0 513.02 MiB / SYCL_Host 28.03 MiB | 同左 |
+
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`，`n_batch=2048`（大图按 `2048 + 1984` 两批喂入），均为热跑稳定态（`load time` ≈ 125 ms）。
+>
+> **与 0.4.1 同图对照**（同一组图、同一批切分）：小图生成 90.94 → **88.75 t/s**（−2.4%）、大图 86.64 → **85.59 t/s**（−1.2%）；小图 prompt eval 1266.65 → **1212.81 t/s**（−4.3%）、大图 1404.81 → **1331.59 t/s**（−5.2%）；图像编码 1639 → 1779 ms、10086 → 11030 ms（+8.5% / +9.4%）。两组数据相隔约 20 天、非同一会话，**未做同会话 A/B**，该幅度按跨会话波动记录（同会话内两张不同大图的单位 token 图像编码成本为 2.730 / 2.736 ms/token，测量本身稳定）。
+>
+> 与 0.4.2 的关系：0.4.2 当时使用的是另外两张图，**不可逐项横比**；按单位 token 图像编码成本（0.4.2 为 2.754 ms/token）两版基本一致。
+>
+> 读数说明：大图 prompt eval 的 t/s 高于小图，主要来自**批处理加成**（大图 4032 个视觉 token 按 `2048 + 1984` 两批喂入，小图 1530 为单批），不宜与小图直接横比。
+>
+> 冷启动提示：模型刚加载后的**首次**运行含一次性开销（SYCL kernel JIT 编译 + oneDNN primitive 创建），实测首次 prompt eval 427.40 t/s、生成 83.41 t/s、`clip_encode` 15907 ms（同图第二次运行降至 11030 ms），第二次运行即回到上表水平——属正常现象，不是性能回退。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 (Battlemage) verified |
+
 ## [0.4.2+sycl] - 2026-10-04
 
 ### Changed from JamePeng (upstream 0.4.2)

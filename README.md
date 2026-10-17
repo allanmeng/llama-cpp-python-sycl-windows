@@ -10,54 +10,56 @@
 
 ---
 
-## 最新版本说明（v0.4.2+sycl · 2026-10-04）
+## 最新版本说明（v0.4.3+sycl · 2026-10-17）
 
-**核心亮点：RPC 远程设备选择 + 扩展 batch API + 多张量 buffer 分配绑定**
+**核心亮点：多模态嵌入 + MTP 图像投机解码 + LlamaBatchExt 与 context 资源管理加固**
 
-- 升级至 llama-cpp-python **0.4.2**（基于 JamePeng `528cf24`，同步 llama.cpp `cb7934c` = b11372，子模块跨 **178 个提交**，零本地补丁）
-- **RPC 远程设备选择**（本版主线）：`Llama` 支持显式选择远端与本地设备；原生注册前先探测 RPC 端点并校验协议 / 设备数，进程级复用注册以避免重复分配厂商自有后端资源
-- **server 侧暴露本地设备选择**：新增 `rpc_local_devices` 模型设置，传空列表可让模型层只落在选定的 RPC 设备上
-- **扩展 batch API**：新增 `llama_batch_ext` / `llama_embd` / `llama_process_type` / `llama_process` 绑定，支持 token 与 embedding 两种输入
-- **多张量 buffer 分配绑定**：新增 `ggml_backend_buft_alloc_buffer_n` 与 `ggml_backend_buft_get_alloc_size_n`
-- **状态返回类型修正**：session save/load 修正为 `bool`、sequence state size 修正为 `size_t`
-- **MTMD 后解码回调对齐**：改用 `mtmd_helper_embd_batch` 指针，取代此前按值传 `llama_batch`
-- **SYCL 后端收益**（llama.cpp 侧 178 个提交）：**Q8_0 DMMV ESIMD + MMVQ wide load**、**D=512 FA vec kernel 启用大寄存器文件**、**运行时探测 oneDNN、无优化实现时整体退回 SYCL kernel**（避免误用慢速 reference matmul / fattn）、**FWHT 宽块 kernel**、**tensor allreduce 改用 pinned host buffer 减少同步**
+- 升级至 llama-cpp-python **0.4.3**（基于 JamePeng `ce261d1`，同步 llama.cpp `27c7a76` = b11703，子模块跨 **330 个提交**，零本地补丁）
+- **多模态嵌入**（本版主线）：新增 `MTMDEmbeddingHandler` 与 `LlamaEmbedding.embed_multimodal()`，**绕开 chat 模板**直接对文本 / 图像 / 音频做 pooled embedding；支持 marker 式 prompt 与有序 text/media 分段，兼容的媒体块自动 batch 并返回带 decoder 位置的 features
+- **MTP 图像投机解码**：MTMD 图像对话可走 MTP 投机解码 —— 媒体子批次连同 positions 与 shift 后的 target hidden states 一起前传，target / draft 状态一起重建，prefill 失败可恢复
+- **投机解码修复**：支持带 hidden states 与媒体位置的 MTP embedding 输入；device checkpoint 部分恢复后清理 attention KV；回滚时重放 pinned 媒体前缀
+- **`LlamaBatchExt` 新增**：支持文本 / embedding / 配对 MTP 输入与显式 batch range，经 `llama_process` 编解码，并支持独立 hidden states（`state` / `states`）
+- **context 资源管理加固**：同步 graph 预留并校验维度、保留已挂载 LoRA adapter、拦截已关闭 context 的操作、错误上报前完成清理、防双重释放
+- **嵌入修正**：`Llama.embed()` 改用 `n_embd_out` 读取（修复 EmbeddingGemma 2 的 768 维投影被截断）；非因果嵌入 batch 限制到 `n_ubatch`
+- **SYCL 后端收益**（llama.cpp 侧 330 个提交，SYCL 16 项）：**Q4_K/Q5_K 反量化 wide stores**、**Q5_K reorder-layout MMVQ 与融合 GLU**、**delta-net alpha gate 融合**、**mul_mat / split buffer / host pool 内存错误修复**、**模型加载经 pinned ring buffer 批量上传**
+- **⚠️ 显存工作集略增**：`SYCL0 compute buffer` 495.00 → **513.02 MiB**、`SYCL_Host` 18.02 → **28.03 MiB**（新增 kernel workspace），非泄漏；8192 上下文下建议多留约 18 MiB 显存
+- **新增 3 个 SYCL 调优开关**（默认开启）：`GGML_SYCL_UPLOAD_STAGING_SLOTS`(4) / `GGML_SYCL_XMX_GATHER_SHAPES`(0xff) / `GGML_SYCL_XMX_GATHER_TYPES`(-1)
 
-**⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1）：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃**
+**⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2）：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃**
 
 - 现象：Qwen3.5 等带 SWA 层的 hybrid 视觉模型，大图（约 4000+ vision tokens）下 prefill 正常，但**首 decode token 崩溃**（`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`）
-- 根因：调用方传 `ctx_checkpoints=0` 会强制 hybrid 模型走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token。经源码核实，该 fast-path 在 0.4.2 中**依然存在**（`llama.py:2138-2144`）
+- 根因：调用方传 `ctx_checkpoints=0` 会强制 hybrid 模型走 "Bypassing rollback" fast-path，大 prefill 下无槽余量给首 decode token。经源码核实，该 fast-path 在 0.4.3 中**依然存在**（`llama.py:2174-2178`）
 - 规避：`ctx_checkpoints` 用默认 `-1`（启用 checkpoint 缓存，避开缺陷分支）
 - **✅ 官方推荐插件已修复**：[comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 已在 `1f0fc15` 将 `ctx_checkpoints` 默认改为 `-1` 并加响应式 `n_ctx` hint，大图视觉推理已恢复正常。使用此插件无需手动处理
 - **本 wheel 本身无此 bug**：纯 `llama_cpp.Llama` 同模型同大图在 `n_ctx=8192` 下已双验证正常
 
-**🚀 B580 实测性能（Qwen3.5-4B 视觉模型 + 图像，0.4.2）：**
+**🚀 B580 实测性能（Qwen3.5-4B 视觉模型 + 图像，0.4.3）：**
 
-| 指标 | 小图 864×1248 | 大图 1696×2464 |
+| 指标 | 小图 1088×1440 | 大图 1792×2304 |
 |------|----------------|----------------|
-| 视觉 token 数 | 1053 | 4081 |
-| 图像编码耗时 | 913 ms（clip_encode） | 11241 ms（clip_encode） |
-| 图像解码耗时 | 787 ms（batch 1/1） | 1140 ms（batch 1/2）+ 1465 ms（batch 2/2） |
-| prompt eval | **1022.37 t/s**（1057.35 ms / 1081 tokens） | **1307.20 t/s**（3143.37 ms / 4109 tokens） |
-| 生成速度 | **88.27 t/s**（eval 16425.96 ms / 1450 runs） | **84.28 t/s**（eval 17655.87 ms / 1488 runs） |
-| 总耗时 | 26.69 s | 42.02 s |
-| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），pos 67 / 1517 | 2 次 host checkpoint（各 50.25 MiB），pos 105 / 1593 |
-| SYCL 计算缓冲 | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB | 同左 |
+| 视觉 token 数 | 1530 | 4032 |
+| 图像编码耗时 | 1779 ms（clip_encode） | 11030 ms（clip_encode） |
+| 图像解码耗时 | 760 ms（batch 1/1） | 1129 ms（batch 1/2）+ 1439 ms（batch 2/2） |
+| prompt eval | **1212.81 t/s**（1284.62 ms / 1558 tokens） | **1331.59 t/s**（3048.99 ms / 4060 tokens） |
+| 生成速度 | **88.75 t/s**（eval 13295.33 ms / 1180 runs） | **85.59 t/s**（eval 17010.77 ms / 1456 runs） |
+| 总耗时 | 24.51 s | 40.58 s |
+| Hybrid checkpoint | 2 次 host checkpoint（各 50.25 MiB），pos 73 / 1253 | 2 次 host checkpoint（各 50.25 MiB），pos 100 / 1556 |
+| SYCL 计算缓冲 | SYCL0 513.02 MiB / SYCL_Host 28.03 MiB | 同左 |
 
-> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`，`n_batch=2048`，均为热跑稳定态。
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`，`n_batch=2048`（大图按 `2048 + 1984` 两批喂入），均为热跑稳定态（`load time` ≈ 125 ms）。
 >
-> **与 0.4.1 同图对照**（同一组图、同一会话内连续运行）：图像编码 913 ms（**完全一致**）、大图图像编码 11211 → 11241 ms、小图 prompt eval 1055.11 → 1022.37 t/s、大图 prompt eval 1316.58 → 1307.20 t/s、小图生成 88.22 → 88.27 t/s、大图生成 83.79 → 84.28 t/s —— **逐项吻合，无性能回退**。
+> **与 0.4.1 同图对照**（同一组图、同一批切分）：生成 90.94 → **88.75 t/s**（−2.4%）、86.64 → **85.59 t/s**（−1.2%）；prompt eval 1266.65 → **1212.81 t/s**（−4.3%）、1404.81 → **1331.59 t/s**（−5.2%）；图像编码 1639 → 1779 ms、10086 → 11030 ms。两组数据相隔约 20 天、非同一会话，**未做同会话 A/B**，该幅度按跨会话波动记录。
 >
-> 读数说明：大图 prompt eval 的 t/s 高于小图，主要来自**批处理加成**（大图 4081 个视觉 token 按 `2048 + 2033` 两批喂入，小图 1053 为单批），不宜与小图直接横比。
+> 读数说明：大图 prompt eval 的 t/s 高于小图，主要来自**批处理加成**（大图 4032 个视觉 token 按 `2048 + 1984` 两批喂入，小图 1530 为单批），不宜与小图直接横比。
 >
-> 冷启动提示：模型刚加载后的**首次**运行含一次性开销（SYCL kernel JIT 编译 + oneDNN primitive 创建），实测首次 prompt eval 426.23 t/s、生成 83.06 t/s、`clip_encode` 约 15969 ms（同图第二次运行降至 11241 ms），第二次运行即回到上表水平——属正常现象，不是性能回退。
+> 冷启动提示：模型刚加载后的**首次**运行含一次性开销（SYCL kernel JIT 编译 + oneDNN primitive 创建），实测首次 prompt eval 427.40 t/s、生成 83.41 t/s、`clip_encode` 约 15907 ms（同图第二次运行降至 11030 ms），第二次运行即回到上表水平——属正常现象，不是性能回退。
 
 **社区反馈：**
 
 > ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** —— 视觉模型兼容性良好
 > 详见：https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
 
-**安装包**：`llama_cpp_python-0.4.2+sycl-cp313-cp313-win_amd64.whl`（约 37MB，精简版，需预装 oneAPI 2026.1）
+**安装包**：`llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl`（约 39MB，精简版，需预装 oneAPI 2026.1）
 
 ---
 
@@ -87,7 +89,7 @@ pip uninstall llama-cpp-python -y
 #### 步骤 2：安装新版本 whl
 
 ```bat
-pip install llama_cpp_python-0.4.2+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl
 ```
 
 #### 步骤 3：更新 ComfyUI 插件
@@ -200,6 +202,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | 版本 | 文件 | 大小 |
 |------|------|------|
+| 0.4.3 | `llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl` | ~39 MB |
 | 0.4.2 | `llama_cpp_python-0.4.2+sycl-cp313-cp313-win_amd64.whl` | ~37 MB |
 | 0.4.1 | `llama_cpp_python-0.4.1+sycl-cp313-cp313-win_amd64.whl` | ~37 MB |
 | 0.4.0 | `llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
@@ -230,7 +233,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 ```bat
 pip uninstall llama-cpp-python -y
-pip install llama_cpp_python-0.4.2+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl
 ```
 
 先 uninstall 再 install 是最干净的安装方式。

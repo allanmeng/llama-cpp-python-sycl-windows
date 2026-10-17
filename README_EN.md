@@ -8,54 +8,56 @@ Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) wh
 
 ---
 
-## Latest Release Notes (v0.4.2+sycl · 2026-10-04)
+## Latest Release Notes (v0.4.3+sycl · 2026-10-17)
 
-**Key highlights: RPC remote device selection + extended batch API + multi-tensor buffer allocation bindings**
+**Key highlights: multimodal embeddings + MTP image speculation + LlamaBatchExt and context resource hardening**
 
-- Upgraded to llama-cpp-python **0.4.2** (based on JamePeng `528cf24`, llama.cpp `cb7934c` = b11372, **178 submodule commits**, zero local patches)
-- **RPC remote device selection** (headline feature): `Llama` can now explicitly select remote and local devices; RPC endpoints are probed and validated (protocol + device count) before native registration, and registrations are reused process-wide to avoid repeatedly allocating vendor-owned backend resources
-- **Server-side local device selection**: new `rpc_local_devices` model setting — an empty list pins model layers to the selected RPC devices only
-- **Extended batch API**: new `llama_batch_ext` / `llama_embd` / `llama_process_type` / `llama_process` bindings supporting both token and embedding inputs
-- **Multi-tensor buffer allocation bindings**: `ggml_backend_buft_alloc_buffer_n` and `ggml_backend_buft_get_alloc_size_n`
-- **State return types corrected**: session save/load now return `bool`, sequence state size returns `size_t`
-- **MTMD post-decode callback aligned**: now passes an `mtmd_helper_embd_batch` pointer instead of a by-value `llama_batch`
-- **SYCL backend gains** (178 llama.cpp commits): **Q8_0 DMMV ESIMD + MMVQ wide load**, **large register file for D=512 FA vec kernels**, **runtime oneDNN capability probe with graceful fallback to SYCL kernels** (avoids the slow reference matmul / fattn), **FWHT kernels for block widths above 512**, **tensor allreduce switched to pinned host buffers to cut synchronization**
+- Upgraded to llama-cpp-python **0.4.3** (based on JamePeng `ce261d1`, llama.cpp `27c7a76` = b11703, **330 submodule commits**, zero local patches)
+- **Multimodal embeddings** (headline feature): new `MTMDEmbeddingHandler` and `LlamaEmbedding.embed_multimodal()` produce pooled text / image / audio embeddings **without chat templates**; supports marker-based prompts and ordered text/media parts, batches compatible media chunks automatically, and returns owned features with decoder positions
+- **MTP image speculative decoding**: MTMD image chat can now run under MTP speculation — media sub-batches are forwarded with positions and shifted target hidden states, target / draft state are rebuilt together, and prefill failures recover cleanly
+- **Speculative decoding fixes**: MTP embedding inputs with hidden states and media positions are now supported; attention KV is cleaned up after partial device checkpoint restores; pinned media prefixes are replayed during rollback
+- **New `LlamaBatchExt`**: text / embedding / paired MTP inputs with explicit batch ranges, routed through `llama_process`, now including separate hidden states (`state` / `states`)
+- **Context resource hardening**: synchronized graph reservation with dimension validation, attached LoRA adapters retained, closed-context operations guarded, resources cleaned up before errors are reported, double frees prevented
+- **Embedding fixes**: `Llama.embed()` now reads `n_embd_out` (fixes truncation of EmbeddingGemma 2's 768-dim projected output); non-causal embedding batches are limited to `n_ubatch`
+- **SYCL backend gains** (330 llama.cpp commits, 16 SYCL-specific): **wide stores for Q4_K/Q5_K weight dequant**, **Q5_K reorder-layout MMVQ with fused GLU**, **delta-net alpha gate fusion**, **memory-error fixes in mul_mat / split buffer / host pool**, **model loading staged through a pinned ring buffer**
+- **⚠️ Slightly larger memory footprint**: `SYCL0 compute buffer` 495.00 → **513.02 MiB**, `SYCL_Host` 18.02 → **28.03 MiB** (workspace for the new kernels) — not a leak; leave ~18 MiB more headroom at 8192 context
+- **3 new SYCL tuning knobs** (enabled by default): `GGML_SYCL_UPLOAD_STAGING_SLOTS`(4) / `GGML_SYCL_XMX_GATHER_SHAPES`(0xff) / `GGML_SYCL_XMX_GATHER_TYPES`(-1)
 
-**⚠️ Known integration note (carried over from 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1): hybrid vision model + `ctx_checkpoints=0` first-decode crash**
+**⚠️ Known integration note (carried over from 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2): hybrid vision model + `ctx_checkpoints=0` first-decode crash**
 
 - Symptom: hybrid vision models with SWA layers (e.g. Qwen3.5), on large images (~4000+ vision tokens), prefill succeeds but **first decode token crashes** (`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`)
-- Root cause: caller passing `ctx_checkpoints=0` forces the hybrid model down a "Bypassing rollback" fast-path that has no slot headroom for the first decode token on large prefills. Verified against the source: this fast-path **still exists** in 0.4.2 (`llama.py:2138-2144`)
+- Root cause: caller passing `ctx_checkpoints=0` forces the hybrid model down a "Bypassing rollback" fast-path that has no slot headroom for the first decode token on large prefills. Verified against the source: this fast-path **still exists** in 0.4.3 (`llama.py:2174-2178`)
 - Workaround: use default `ctx_checkpoints=-1` (enables checkpoint cache, avoids the broken branch)
 - **✅ Official recommended plugin fixed**: [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) changed the default to `-1` in `1f0fc15` with a reactive `n_ctx` hint; large-image vision inference now works normally. No manual handling needed when using this plugin
 - **This wheel has no such bug**: pure `llama_cpp.Llama` on the same model + large image at `n_ctx=8192` verified working (double-checked)
 
-**🚀 Measured performance on B580 (Qwen3.5-4B vision model + images, 0.4.2):**
+**🚀 Measured performance on B580 (Qwen3.5-4B vision model + images, 0.4.3):**
 
-| Metric | Small image 864×1248 | Large image 1696×2464 |
+| Metric | Small image 1088×1440 | Large image 1792×2304 |
 |--------|----------------------|-----------------------|
-| Vision tokens | 1053 | 4081 |
-| Image encode time | 913 ms (clip_encode) | 11241 ms (clip_encode) |
-| Image decode time | 787 ms (batch 1/1) | 1140 ms (batch 1/2) + 1465 ms (batch 2/2) |
-| Prompt eval | **1022.37 t/s** (1057.35 ms / 1081 tokens) | **1307.20 t/s** (3143.37 ms / 4109 tokens) |
-| Generation speed | **88.27 t/s** (eval 16425.96 ms / 1450 runs) | **84.28 t/s** (eval 17655.87 ms / 1488 runs) |
-| Total time | 26.69 s | 42.02 s |
-| Hybrid checkpoint | 2 host checkpoints (50.25 MiB each), pos 67 / 1517 | 2 host checkpoints (50.25 MiB each), pos 105 / 1593 |
-| SYCL compute buffer | SYCL0 495.00 MiB / SYCL_Host 18.02 MiB | same as left |
+| Vision tokens | 1530 | 4032 |
+| Image encode time | 1779 ms (clip_encode) | 11030 ms (clip_encode) |
+| Image decode time | 760 ms (batch 1/1) | 1129 ms (batch 1/2) + 1439 ms (batch 2/2) |
+| Prompt eval | **1212.81 t/s** (1284.62 ms / 1558 tokens) | **1331.59 t/s** (3048.99 ms / 4060 tokens) |
+| Generation speed | **88.75 t/s** (eval 13295.33 ms / 1180 runs) | **85.59 t/s** (eval 17010.77 ms / 1456 runs) |
+| Total time | 24.51 s | 40.58 s |
+| Hybrid checkpoint | 2 host checkpoints (50.25 MiB each), pos 73 / 1253 | 2 host checkpoints (50.25 MiB each), pos 100 / 1556 |
+| SYCL compute buffer | SYCL0 513.02 MiB / SYCL_Host 28.03 MiB | same as left |
 
-> Test scene: Qwen3.5-4B-Uncensored + mmproj-BF16, hybrid architecture (with SWA layers), `ctx_checkpoints=-1`, `n_ctx=8192`, `n_batch=2048`, all figures from warm steady state.
+> Test scene: Qwen3.5-4B-Uncensored + mmproj-BF16, hybrid architecture (with SWA layers), `ctx_checkpoints=-1`, `n_ctx=8192`, `n_batch=2048` (large image fed as `2048 + 1984`), all figures from warm steady state (`load time` ≈ 125 ms).
 >
-> **Same-image comparison vs 0.4.1** (identical images, consecutive runs in one session): image encode 913 ms (**identical**), large-image encode 11211 → 11241 ms, small-image prompt eval 1055.11 → 1022.37 t/s, large-image prompt eval 1316.58 → 1307.20 t/s, small-image generation 88.22 → 88.27 t/s, large-image generation 83.79 → 84.28 t/s — **matching item by item, no regression**.
+> **Same-image comparison vs 0.4.1** (identical images, identical batching): generation 90.94 → **88.75 t/s** (−2.4%), 86.64 → **85.59 t/s** (−1.2%); prompt eval 1266.65 → **1212.81 t/s** (−4.3%), 1404.81 → **1331.59 t/s** (−5.2%); image encode 1639 → 1779 ms, 10086 → 11030 ms. The two datasets are ~20 days apart and from different sessions with **no same-session A/B**, so the spread is recorded as cross-session variance.
 >
-> Reading note: the large-image prompt-eval t/s is higher than the small-image figure mainly because of **batching** (4081 vision tokens are fed as `2048 + 2033`, while the small image's 1053 is a single batch), so the two columns are not directly comparable.
+> Reading note: the large-image prompt-eval t/s is higher than the small-image figure mainly because of **batching** (4032 vision tokens are fed as `2048 + 1984`, while the small image's 1530 is a single batch), so the two columns are not directly comparable.
 >
-> Cold-start note: the **first** run after the model is loaded carries a one-off cost (SYCL kernel JIT compilation + oneDNN primitive creation) — measured first-run prompt eval 426.23 t/s, generation 83.06 t/s, `clip_encode` ≈ 15969 ms (the same image warm drops to 11241 ms). The second run returns to the table above; this is normal, not a regression.
+> Cold-start note: the **first** run after the model is loaded carries a one-off cost (SYCL kernel JIT compilation + oneDNN primitive creation) — measured first-run prompt eval 427.40 t/s, generation 83.41 t/s, `clip_encode` ≈ 15907 ms (the same image warm drops to 11030 ms). The second run returns to the table above; this is normal, not a regression.
 
 **Community feedback:**
 
 > ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** — vision model compatibility confirmed
 > See: https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
 
-**Wheel**: `llama_cpp_python-0.4.2+sycl-cp313-cp313-win_amd64.whl` (~37 MB, slim build, requires oneAPI 2026.1)
+**Wheel**: `llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl` (~39 MB, slim build, requires oneAPI 2026.1)
 
 ---
 
@@ -85,7 +87,7 @@ pip uninstall llama-cpp-python -y
 #### Step 2: Install the New Wheel
 
 ```bat
-pip install llama_cpp_python-0.4.2+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl
 ```
 
 #### Step 3: Update Your ComfyUI Plugin
@@ -198,6 +200,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | Version | File | Size |
 |---------|------|------|
+| 0.4.3 | `llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl` | ~39 MB |
 | 0.4.2 | `llama_cpp_python-0.4.2+sycl-cp313-cp313-win_amd64.whl` | ~37 MB |
 | 0.4.1 | `llama_cpp_python-0.4.1+sycl-cp313-cp313-win_amd64.whl` | ~37 MB |
 | 0.4.0 | `llama_cpp_python-0.4.0+sycl-cp313-cp313-win_amd64.whl` | ~36 MB |
@@ -228,7 +231,7 @@ Download from [Releases](https://github.com/allanmeng/llama-cpp-python-sycl-wind
 
 ```bat
 pip uninstall llama-cpp-python -y
-pip install llama_cpp_python-0.4.2+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl
 ```
 
 Uninstalling first ensures a clean state.
