@@ -17,7 +17,7 @@
   - **hybrid checkpoint 恢复不再因 live export size 变化而被拒**：改为校验保存载荷长度，并在恢复时借用不可变字节。
   - **缓存前缀匹配统一**：RAM / disk / trie 三路取最长非空公共前缀（含分歧历史与短于缓存键的请求）；压缩 trie 边、有界候选堆与 append 快捷路径降低插入/淘汰开销。
 - **llama.cpp 同步**：`vendor/llama.cpp` 由 `27c7a76` 推进至 `74bca39`（llama.cpp **`b11870`**，2026-10-24；子模块跨 **167 个提交**）。SYCL 侧 16 项，其中可能命中本机 Q4_K 路径的：**ESIMD kernel 在 FFN 路径恢复启用（#30239，含 dmmv 与 fusion）**、**XMX 矩阵引擎多列 `mul_mat_vec_q` 重构（#29864，含融合 gate/up SWIGLU·GEGLU epilogue）**、**`get_rows` 在 reorder 权重上的修复（#30430，本机构建 `Reorder=Y` 直接命中）**、**SYCL graph 录制/重放（#28725，默认关闭）**、**反量化 fp16 与 fp32 开关合并（#30740）**、**fattn-mkl 以显式依赖替代 host wait（#30684）**、**CONV_2D 非连续输入错误结果修复（#30363，涉及视觉投影）**、**`memset` 改为有序写（#30812）**、**mmq 重复 `need_check` 启动体合并（#30739）**；其余为 Q8 快速反量化（#30775，本模型零 Q8_0 张量）、FA 在 D=2048/4096 且 query head 维度不匹配时的崩溃修复（#30286，本模型 kv len 256 不命中）、`MUL_MAT_ID` 支持 -1 索引跳过计算（#26631，MoE 路径）、IQ3 崩溃修复（#30604）、编译告警清理（#30271）。
-  - **XMX 多列的适用范围提示**：该重构面向投机解码验证（每步 2–8 token）与短提示批（9–80 token）；单列（普通自回归解码）仅 Q2_K / Q3_K / Q8_0 走新路径，**Q4_K_M / Q5_K 的单列解码不受益**。上游 B70 上 Q4_K_M `tg128` 提升 5.9% 来自多列场景，不要预期本机单条对话流同比提升。
+  - **XMX 的适用范围（按合并后源码核实）**：该重构覆盖 Q2_K / Q3_K / Q4_K / Q5_K / Q6_K / Q8_0 六种类型。单列（普通自回归解码）是否走 XMX 由 `ggml_sycl_xmx_min_cols(type) == 1` 决定，实际为 **Q2_K / Q3_K / Q4_K** —— 即本模型的 Q4_K 权重在**单 token 解码时即走 XMX int8 DPAS 路径**；Q5_K / Q6_K / Q8_0 需 ≥2 列才启用。多列路径覆盖 2–80 列（面向投机解码验证每步 2–8 token 与短提示批 9–80 token），融合 gate/up GLU kernel 最多 16 列。前置条件为 `Reorder=Y`（权重已 reorder）与 BMG / LNL 架构。
 
 ### Changed (this build)
 
@@ -30,7 +30,7 @@
 - **设备侧 checkpoint 的日志显示瑕疵（不影响功能）**：`saved device checkpoint ... size=0.00 MiB`，而紧邻上一行 `~llama_io_write_device: allocated 'SYCL0' buffer 50.250 MiB` 证明实际已分配 50.25 MiB —— 设备路径未填 size 统计字段，属打印问题，显存核算不受影响。
 - **视觉 / 音频 / TTS handler 验证**：`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / `Qwen35ChatHandler` / `GenericMTMDChatHandler` / `Qwen3ASRChatHandler` / `MTMDBaseHandler` / `MTMDAudioGenerator` 七件套在本构建下全部验证可正常导入。注意 `MTMDBaseHandler`、`MTMDAudioGenerator` 仅在 `llama_cpp.llama_multimodal` 中导出，**`llama_chat_format` 未做重导出**。
 - **SYCL 后端自检**：设备枚举正常（`Intel Arc Pro B70 Graphics`，SYCL 20.2，256 compute units，33530 MB，driver `1.15.39183+4`，`Reorder=Y`）；`GGML_SYCL_ENABLE_DNN=1`、`GGML_SYCL_FA_ONEDNN=1`、`GGML_SYCL_ENABLE_XMX_ESIMD=1`，oneDNN flash-attention 路径正常开启，无 `oneDNN has no optimized matmul` 回退告警。
-- **新增 SYCL 环境变量**：`GGML_SYCL_ENABLE_XMX_ESIMD`（默认 `1`）、`GGML_SYCL_XMX_MAX_COLS`（默认 `80`，融合 gate/up kernel 的最大批宽）、`GGML_SYCL_XMX_GLU_MAX_COLS`（默认 `16`，只能下调，上限即 16）、`GGML_SYCL_GRAPH_EVICTION_TIMEOUT`（默认 `10`）。**`GGML_SYCL_ENABLE_GRAPH` 默认 `0`** —— graph 录制/重放不会自动生效，需显式设为 `1`。
+- **新增 SYCL 调优项**：环境变量 **3 个** —— `GGML_SYCL_ENABLE_XMX_ESIMD`（默认 `1`）、`GGML_SYCL_XMX_MAX_COLS`（默认 `80`，XMX `mul_mat_vec_q` 处理的最大列数，更宽的批次走其他 kernel）、`GGML_SYCL_GRAPH_EVICTION_TIMEOUT`（默认 `10` 秒，缓存 SYCL graph 的空闲淘汰阈值，按该值的一半周期性扫描）。另有 **4 个编译期宏**（`GGML_SYCL_XMX_GLU_MAX_COLS`=16、`GGML_SYCL_XMX_MAX_COLS_DEFAULT`=80、`GGML_SYCL_MMVQ_HAS_XMX`、`GGML_SYCL_GRAPH_DNNL_SUPPORTED`）**不能用环境变量设置** —— 其中 `GGML_SYCL_XMX_GLU_MAX_COLS` 会出现在启动日志（`GGML_SYCL_XMX_GLU_MAX_COLS: 16`）里，但那是宏值打印而非 env 读取。**`GGML_SYCL_ENABLE_GRAPH` 默认 `0`** —— graph 录制/重放不会自动生效，需显式设为 `1`；该开关在 0.4.3 已存在（cmake 默认 ON 编入），但 0.4.3 无实现，本版才真正实装。
 - **构建配置说明**：启动日志显示 `GGML_SYCL_DYNAMIC_PRECISION: F32` —— 因本构建**未定义 `GGML_SYCL_F16`**（上游 CMake 默认 OFF，与历版构建一致），源码走 F32 分支，XMX dequant-GEMM 路径不启用、library GEMM 保持 f32。此为本仓库一贯配置，非本版变更。
 - **构建记录（与上游代码无关，备查）**：本版 `mmvq.cpp` 单文件编译产物达 13.8 MB，`ggml-sycl.dll` 的 `-fsycl` 链接明显变重；本机构建连续两次在同一步链接处死锁（进程 CPU 零增长、构建目录停止更新），改在编辑器沙箱外重跑即通过。
 

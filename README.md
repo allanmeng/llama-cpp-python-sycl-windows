@@ -21,9 +21,9 @@
 - **`LlamaModel.suppress_tokens()`** 新增（位于 `llama_cpp._internals`，**非顶层导出**）；采样侧改为在候选过滤前合并模型 suppression 与用户 logit bias，且不再修改调用方参数
 - **投机解码 / hybrid 状态可靠性（0.4.4 段）**：跳过无用的 final target checkpoint（上游实测每请求少导出约 **50 MiB**、清理 27–28 ms → 约 0.1 ms、吞吐 **+8~12%**）；MTP 验证钩子与 native rollback 对齐；**checkpoints 关闭时仍保留有效前缀复用**；hybrid checkpoint 恢复不再因 export size 变化被拒；RAM / disk / trie 前缀匹配统一
 - **SYCL 后端收益**（llama.cpp 侧 167 个提交，SYCL 16 项）：**ESIMD kernel 在 FFN 路径恢复启用**、**XMX 矩阵引擎多列 `mul_mat_vec_q` 重构**、**`get_rows` 在 reorder 权重上的修复**（本构建 `Reorder=Y` 直接命中）、**graph 录制/重放（默认关闭）**、**反量化 fp16/fp32 开关合并**、**fattn-mkl 显式依赖替代 host wait**、**CONV_2D 非连续输入错误结果修复**、**`memset` 改有序写**
-- **XMX 多列的适用范围**：面向投机解码验证（每步 2–8 token）与短提示批（9–80 token）；单列自回归解码仅 Q2_K / Q3_K / Q8_0 走新路径，**Q4_K_M / Q5_K 的单列解码不受益**（上游 B70 的 5.9% 来自多列场景）
+- **XMX 的覆盖面（按合并后源码核实）**：六种 K-quant / Q8_0 类型全部支持；单列自回归解码是否走 XMX 由 `ggml_sycl_xmx_min_cols(type) == 1` 决定，实际为 **Q2_K / Q3_K / Q4_K** —— **本模型的 Q4_K 权重在单 token 解码时即走 XMX int8 DPAS**；Q5_K / Q6_K / Q8_0 需 ≥2 列才启用。多列路径覆盖 2–80 列（面向投机解码验证与短提示批），融合 gate/up GLU kernel 最多 16 列。前置条件是 `Reorder=Y`（权重已 reorder）与 BMG / LNL 架构
 - **显存工作集与 0.4.3 完全一致**：`SYCL0 compute buffer` **513.02 MiB**、`SYCL_Host` **28.03 MiB**，两次运行均 `matches expectation`，未增长、无泄漏
-- **新增 4 个 SYCL 调优开关**：`GGML_SYCL_ENABLE_XMX_ESIMD`(1) / `GGML_SYCL_XMX_MAX_COLS`(80) / `GGML_SYCL_XMX_GLU_MAX_COLS`(16) / `GGML_SYCL_GRAPH_EVICTION_TIMEOUT`(10)；**`GGML_SYCL_ENABLE_GRAPH` 默认 `0`**，graph 重放需显式开启
+- **新增 3 个 SYCL 环境变量**：`GGML_SYCL_ENABLE_XMX_ESIMD`(1) / `GGML_SYCL_XMX_MAX_COLS`(80) / `GGML_SYCL_GRAPH_EVICTION_TIMEOUT`(10)；另有 4 个**编译期宏**（`GGML_SYCL_XMX_GLU_MAX_COLS`=16 等）无法用环境变量设置，其中 `XMX_GLU_MAX_COLS` 会以宏值形式出现在启动日志里，易被误认为 env。**`GGML_SYCL_ENABLE_GRAPH` 默认 `0`**，graph 重放需显式开启（该开关 0.4.3 已存在但无实现，本版才实装）
 
 **⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3）：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃**
 
