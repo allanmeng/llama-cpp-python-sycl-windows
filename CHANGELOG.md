@@ -1,4 +1,72 @@
 # Changelog
+## [0.4.5+sycl] - 2026-10-26
+
+### Changed from JamePeng (upstream 0.4.5)
+
+升级至 llama-cpp-python 0.4.5（基于 JamePeng `3fc39b2`；距 0.4.3 的 `ce261d1` 共 **26 个提交**）。⚠️ **上游 0.4.4 有 CHANGELOG 段但没有独立的版本提交**（`__version__` 从 0.4.3 直接跳到 0.4.5），因此本段一并覆盖上游 `[0.4.4]` 与 `[0.4.5]` 两段内容；上游 CHANGELOG 段头 `[0.4.5] LiliCorr Speculative Decoding, Soprano TTS & Multimodal Cache Optimization`。关键改动（来自 JamePeng CHANGELOG）：
+
+- **LiliCorr 投机解码（本版主线）**：新增 LiliCorr 块解码、projected anchor 处理与 checkpoint 恢复；对齐 MTP/DFlash 的 CPU 抑制与候选概率以匹配厂商行为，同时保留既有 backend 与 lattice 路径。上游在 Nemotron-3.5-Bolt-74B-A9B-24GB + LiLiCorr 上实测解码 **132.6 → 198.0 tok/s（1.49x）**、含首 token 延迟 129.5 → 180.1 tok/s（1.39x），草稿接受率 33.4–59.1%。
+- **Soprano TTS**：新增音频流行数与 flush 进度查询（可选 int64 API）；支持非流式 Soprano WAV/PCM 合成并做模型专属校验。上游用 Soprano-1.1-80M BF16 + F16 mmproj 验证 32 kHz GPU 输出、重复请求、帧数上限与错误恢复；Qwen3-TTS / Pocket TTS 在固定种子下输出逐字节不变。
+- **MTMD 媒体缓存优化（多轮对话收益最大）**：无投机引擎或其他设备缓存占用槽位时改用**设备侧媒体 checkpoint**，槽位冲突时保留 host 快照并在设备导出失败后回退；媒体 ID 改为带冲突检查的负值、位置计数改用原生值；跨轮保留可复用历史与媒体 checkpoint；归一化 BOS/EOS 与 Qwen vision 边界以防重复。上游实测 Qwen3.5 第 2/3 轮首 token 延迟降约 **60%**、图像缓存命中率 **0% → 100%**（Gemma4E 第 2 轮同样命中）；首轮首 token 延迟 141.8 → 131.3 ms（−7.4%）。
+- **`LlamaModel.suppress_tokens()`**：把原生词表的 suppressed token ID 复制为 Python list（本构建中定义于 `llama_cpp/_internals.py`，**非顶层导出**）。
+- **采样修复**：模型级 suppressed token 与用户 logit bias 改为在候选过滤前合并，且不修改调用方的 sampling 参数；去掉用户 bias 的重复应用；reasoning budget 强制 token 时保留其既有分数，以匹配厂商行为且不覆盖 suppression 与 grammar mask。
+- **0.4.4 段主要内容（本版一并生效）**：
+  - **投机解码跳过无用的 final target checkpoint**：请求结束时不再导出仅 target 侧的快照，普通收尾前缀与验证回退捕获保持不变。上游 Qwen3.5-9B-MTP Q8_0 / RTX 5090 实测每请求少导出约 **50 MiB** 状态、清理耗时 27–28 ms → 约 **0.1 ms**，两项 64-token 负载端到端吞吐 **+8~12%**。
+  - **MTP 验证钩子与 native rollback 对齐**：回调改传当前采样行与已接受的输入前缀；零 checkpoint 校验按 target 的原生回滚能力设上限；回滚失败后作废快照；原生后缀截断足够时不再复制已接受的 feature block。
+  - **checkpoints 关闭时仍保留有效前缀复用**：仅当上一次采样输出有效时才复用完整 hybrid 前缀；跳过被禁用的 checkpoint 搜索与周期性历史准备；只加载能改进当前前缀且可安全恢复的快照。
+  - **hybrid checkpoint 恢复不再因 live export size 变化而被拒**：改为校验保存载荷长度，并在恢复时借用不可变字节。
+  - **缓存前缀匹配统一**：RAM / disk / trie 三路取最长非空公共前缀（含分歧历史与短于缓存键的请求）；压缩 trie 边、有界候选堆与 append 快捷路径降低插入/淘汰开销。
+- **llama.cpp 同步**：`vendor/llama.cpp` 由 `27c7a76` 推进至 `74bca39`（llama.cpp **`b11870`**，2026-10-24；子模块跨 **167 个提交**）。SYCL 侧 16 项，其中可能命中本机 Q4_K 路径的：**ESIMD kernel 在 FFN 路径恢复启用（#30239，含 dmmv 与 fusion）**、**XMX 矩阵引擎多列 `mul_mat_vec_q` 重构（#29864，含融合 gate/up SWIGLU·GEGLU epilogue）**、**`get_rows` 在 reorder 权重上的修复（#30430，本机构建 `Reorder=Y` 直接命中）**、**SYCL graph 录制/重放（#28725，默认关闭）**、**反量化 fp16 与 fp32 开关合并（#30740）**、**fattn-mkl 以显式依赖替代 host wait（#30684）**、**CONV_2D 非连续输入错误结果修复（#30363，涉及视觉投影）**、**`memset` 改为有序写（#30812）**、**mmq 重复 `need_check` 启动体合并（#30739）**；其余为 Q8 快速反量化（#30775，本模型零 Q8_0 张量）、FA 在 D=2048/4096 且 query head 维度不匹配时的崩溃修复（#30286，本模型 kv len 256 不命中）、`MUL_MAT_ID` 支持 -1 索引跳过计算（#26631，MoE 路径）、IQ3 崩溃修复（#30604）、编译告警清理（#30271）。
+  - **XMX 多列的适用范围提示**：该重构面向投机解码验证（每步 2–8 token）与短提示批（9–80 token）；单列（普通自回归解码）仅 Q2_K / Q3_K / Q8_0 走新路径，**Q4_K_M / Q5_K 的单列解码不受益**。上游 B70 上 Q4_K_M `tg128` 提升 5.9% 来自多列场景，不要预期本机单条对话流同比提升。
+
+### Changed (this build)
+
+- **零本地补丁**：本构建**未应用任何本地 patch**（`patches/` 下两个补丁自 0.3.49 起已作废，上游已正式修复，**后续发版不要再 apply**）。
+- **打包方式为精简版（方案 A）**：whl **不自包含 oneAPI 运行时**，移除与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积约 **42 MiB**。**部署目标机需预装 Intel oneAPI**（SYCL 核心运行时 `sycl9.dll` / `OpenCL.dll` 及上述数值库由 oneAPI 提供）。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+- **与 0.4.3 逐条目对拍**：包内 **Python 文件集合完全一致**（26 个 `.py`、共 49 个条目，零增零减 —— 上游新增的 `suppress_tokens` 落在 `_internals.py`、Soprano 相关逻辑落在 `llama_multimodal.py` 的既有 TTS handler 内，**无新增 .py，也无新增 handler 类**）；DLL 变化：`ggml-sycl.dll` 68,933,120 → **74,067,456 B（+5.1 MB）**、`llama.dll` +107,520 B、`llama-common.dll` +86,016 B、`mtmd.dll` +64,512 B、`ggml-cpu.dll` +6,144 B、`ggml-base.dll` +1,024 B；`ggml.dll` 与 `libomp140.x86_64.dll` 字节数不变。
+- **显存工作集与 0.4.3 完全一致**：同设置下 `SYCL0 compute buffer size` = **513.0216 MiB**、`SYCL_Host compute buffer size` = **28.0254 MiB**，两次运行均 `matches expectation`，**未增长、无泄漏**（设备侧媒体 checkpoint 的 50.25 MiB 走 io buffer，不抬高上下文工作集）。
+- **⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3）**：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃问题，**本版未做真机复测**。上游 0.4.4 含一条 `fix(state): preserve valid prefix reuse with checkpoints disabled`，与该校验路径高度相关，**疑似即该问题的修复，但未经本机验证**；同时 `Llama.generate()` 中相关代码已大幅重写（原 0.4.3 的 `llama.py:2174-2178` 快路径已不存在）。因此**建议继续沿用 `ctx_checkpoints=-1`**（官方推荐插件 [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) 自 `1f0fc15` 起已默认 `-1` 并带响应式 `n_ctx` hint）。**本 wheel 本身不涉及该问题**。
+- **设备侧 checkpoint 的日志显示瑕疵（不影响功能）**：`saved device checkpoint ... size=0.00 MiB`，而紧邻上一行 `~llama_io_write_device: allocated 'SYCL0' buffer 50.250 MiB` 证明实际已分配 50.25 MiB —— 设备路径未填 size 统计字段，属打印问题，显存核算不受影响。
+- **视觉 / 音频 / TTS handler 验证**：`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / `Qwen35ChatHandler` / `GenericMTMDChatHandler` / `Qwen3ASRChatHandler` / `MTMDBaseHandler` / `MTMDAudioGenerator` 七件套在本构建下全部验证可正常导入。注意 `MTMDBaseHandler`、`MTMDAudioGenerator` 仅在 `llama_cpp.llama_multimodal` 中导出，**`llama_chat_format` 未做重导出**。
+- **SYCL 后端自检**：设备枚举正常（`Intel Arc Pro B70 Graphics`，SYCL 20.2，256 compute units，33530 MB，driver `1.15.39183+4`，`Reorder=Y`）；`GGML_SYCL_ENABLE_DNN=1`、`GGML_SYCL_FA_ONEDNN=1`、`GGML_SYCL_ENABLE_XMX_ESIMD=1`，oneDNN flash-attention 路径正常开启，无 `oneDNN has no optimized matmul` 回退告警。
+- **新增 SYCL 环境变量**：`GGML_SYCL_ENABLE_XMX_ESIMD`（默认 `1`）、`GGML_SYCL_XMX_MAX_COLS`（默认 `80`，融合 gate/up kernel 的最大批宽）、`GGML_SYCL_XMX_GLU_MAX_COLS`（默认 `16`，只能下调，上限即 16）、`GGML_SYCL_GRAPH_EVICTION_TIMEOUT`（默认 `10`）。**`GGML_SYCL_ENABLE_GRAPH` 默认 `0`** —— graph 录制/重放不会自动生效，需显式设为 `1`。
+- **构建配置说明**：启动日志显示 `GGML_SYCL_DYNAMIC_PRECISION: F32` —— 因本构建**未定义 `GGML_SYCL_F16`**（上游 CMake 默认 OFF，与历版构建一致），源码走 F32 分支，XMX dequant-GEMM 路径不启用、library GEMM 保持 f32。此为本仓库一贯配置，非本版变更。
+- **构建记录（与上游代码无关，备查）**：本版 `mmvq.cpp` 单文件编译产物达 13.8 MB，`ggml-sycl.dll` 的 `-fsycl` 链接明显变重；本机构建连续两次在同一步链接处死锁（进程 CPU 零增长、构建目录停止更新），改在编辑器沙箱外重跑即通过。
+
+### Performance (measured, Arc Pro B70 32GB)
+
+> ⚠️ **测试硬件说明**：本次测试机**临时更换为 Intel Arc Pro B70 32GB**（原 B580 暂时不在机内），且只做了两张图的跑通验证。按约定，下表**只列本版绝对数字，不与任何历史版本做 Δ 对比** —— B580 与 B70 在算力（160 → 256 CU）与显存带宽上的差距过大，跨硬件横比没有意义。
+
+**Qwen3.5-4B 视觉模型：**
+
+| 指标 | 小图 1088×1440（热跑） | 大图 1792×2304（冷跑） |
+|------|------------------------|------------------------|
+| 视觉 token 数 | 1530 | 4032 |
+| 图像编码耗时 | **1120 ms**（clip_encode） | 21670 ms（clip_encode） |
+| 图像解码耗时 | **515 ms**（batch 1/1） | 3101 ms（batch 1/2）+ 2403 ms（batch 2/2） |
+| prompt eval | **1756.58 t/s**（886.38 ms / 1557 tokens） | 34.07 t/s（119133.96 ms / 4059 tokens） |
+| 生成速度 | **117.45 t/s**（eval 9859.19 ms / 1158 runs） | 111.58 t/s（eval 10871.25 ms / 1213 runs） |
+| 总耗时 | 19.00 s | 165.56 s |
+| load time | 99.41 ms（热） | 62993.54 ms（冷） |
+| Hybrid checkpoint | host 1×50.25 MiB（pos 64）+ device（pos 72 / 1230） | host 1×50.25 MiB（pos 91）+ device（pos 99 / 1312） |
+| SYCL 计算缓冲 | SYCL0 513.0216 MiB / SYCL_Host 28.0254 MiB | 同左 |
+
+> 测试场景：Qwen3.5-4B-Uncensored + mmproj-BF16，hybrid 架构（含 SWA 层），`ctx_checkpoints=-1`，`n_ctx=8192`，`n_batch=2048`（大图按 `2048 + 1984` 两批喂入）。
+>
+> **大图为冷跑**（`load time` 62993.54 ms）：其 prompt eval 34.07 t/s 含 SYCL kernel 首次 JIT 编译与 oneDNN primitive 创建的一次性成本（同图第二次运行会回到热跑量级），**不可与本版小图热跑横比**。小图 `load time` 99.41 ms 为热跑稳定态。
+>
+> 需要跨版本性能结论时，请在 B580 上复测后单独记录，**不要引用本表做版本间比较**。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc Pro B70 32GB（临时替代 B580；B580 本版未复测） |
+| SYCL runtime / driver | 20.2 / 1.15.39183+4 |
+
 ## [0.4.3+sycl] - 2026-10-17
 
 ### Changed from JamePeng (upstream 0.4.3)
