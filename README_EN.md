@@ -8,58 +8,67 @@ Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) wh
 
 ---
 
-## Latest Release Notes (v0.4.5+sycl · 2026-10-26)
+## Latest Release Notes (v0.4.6+sycl · 2026-11-07)
 
-**Key highlights: LiliCorr speculative decoding + Soprano TTS + MTMD media cache optimization (also covers upstream 0.4.4)**
+**Key highlights: native API alignment (context per-sequence budgets / MTMD audio-video ABI) + ~5% faster generation (measured on B580) + Chatterbox & Drama 3 TTS**
 
-- Upgraded to llama-cpp-python **0.4.5** (based on JamePeng `3fc39b2`, llama.cpp `74bca39` = b11870, **167 submodule commits**, zero local patches). ⚠️ Upstream **0.4.4 has a CHANGELOG section but was never released as its own version** — `__version__` jumps straight from 0.4.3 to 0.4.5, so this release covers both the 0.4.4 and 0.4.5 sections (**26 commits** since 0.4.3)
-- **LiliCorr speculative decoding** (headline feature): block decoding, projected anchor handling and checkpoint recovery, aligning MTP/DFlash CPU suppression and candidate probabilities with vendor behavior; upstream measured **132.6 → 198.0 tok/s (1.49x)** decoding on Nemotron-3.5-Bolt-74B + LiLiCorr
-- **Soprano TTS**: new audio-stream row-count / flush-progress queries (optional int64 APIs) and non-streaming WAV/PCM synthesis with model-specific validation; Qwen3-TTS / Pocket TTS outputs stay byte-identical for fixed seeds
-- **MTMD media cache optimization** (biggest win for multi-turn chat): device-side media checkpoints when no speculative engine owns the slot, reusable history and media checkpoints retained across turns, BOS/EOS and Qwen vision boundaries normalized to avoid duplication → upstream measured ~**60%** lower first-token latency on Qwen3.5 turns 2–3 and image cache hit rate **0% → 100%**
-- **New `LlamaModel.suppress_tokens()`** (lives in `llama_cpp._internals`, **not a top-level export**); sampling now merges model suppression with user logit biases before candidate filtering without mutating caller parameters
-- **Speculative / hybrid state reliability (0.4.4 section)**: unused final target checkpoints are skipped (upstream: ~**50 MiB** less exported state per request, cleanup 27–28 ms → ~0.1 ms, **+8–12%** throughput); MTP verification hooks aligned with native rollback; **valid prefix reuse preserved with checkpoints disabled**; hybrid checkpoint restores no longer rejected when the live export size changes; RAM / disk / trie prefix matching unified
-- **SYCL backend gains** (167 llama.cpp commits, 16 SYCL-specific): **ESIMD kernels re-enabled on the FFN path**, **XMX multi-column `mul_mat_vec_q` refactor**, **`get_rows` fix on reordered weights** (this build ships `Reorder=Y`, so it lands directly), **graph record/replay (off by default)**, **fp16/fp32 dequant switch merge**, **fattn-mkl explicit dependencies instead of host waits**, **CONV_2D wrong results on non-contiguous input fixed**, **`memset` replaced with ordered writes**
-- **XMX coverage (verified against the merged source)**: all six K-quant / Q8_0 types are supported; single-column autoregressive decoding takes the XMX path when `ggml_sycl_xmx_min_cols(type) == 1`, which is **Q2_K / Q3_K / Q4_K** — so **this model's Q4_K weights already run through XMX int8 DPAS on single-token decode**; Q5_K / Q6_K / Q8_0 need ≥2 columns. The multi-column path covers 2–80 columns (speculative verification and short prompt batches), and the fused gate/up GLU kernel handles up to 16. Prerequisites are `Reorder=Y` (weights reordered) and BMG / LNL architecture
-- **Memory footprint identical to 0.4.3**: `SYCL0 compute buffer` **513.02 MiB**, `SYCL_Host` **28.03 MiB**, both `matches expectation` on two runs — no growth, no leak
-- **3 new SYCL environment variables**: `GGML_SYCL_ENABLE_XMX_ESIMD`(1) / `GGML_SYCL_XMX_MAX_COLS`(80) / `GGML_SYCL_GRAPH_EVICTION_TIMEOUT`(10); a further 4 are **compile-time macros** (`GGML_SYCL_XMX_GLU_MAX_COLS`=16 and friends) that cannot be set via the environment — `XMX_GLU_MAX_COLS` still shows up in the startup log as a macro value, which is easy to mistake for an env var. **`GGML_SYCL_ENABLE_GRAPH` defaults to `0`**, graph replay must be enabled explicitly (the switch existed in 0.4.3 with no implementation; this release is where it actually lands)
-
-**⚠️ Known integration note (carried over from 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3): hybrid vision model + `ctx_checkpoints=0` first-decode crash**
+- Upgraded to llama-cpp-python **0.4.6** (based on JamePeng `1dd04be`, llama.cpp `18ab62a8e` = b12174, **304 submodule commits**, zero local patches; **30 commits** since 0.4.5's `3fc39b2`, two of which only bump the version and fix macOS CI)
+- **New `n_ctx_seq()` (the most important behaviour change)**: `n_ctx()` stays the total native capacity, while the new `n_ctx_seq()` governs generation, context shifting and multimodal capacity checks; oversized embedding inputs with `truncate=False` are rejected early. **The per-sequence window only shrinks when `n_seq_max > 1` and `kv_unified=False`** — this plugin never passes `n_seq_max` (default 1), so it is **unaffected**
+- **MTMD audio/video ABI alignment**: audio stream, generation input/info, video and clip parameter layouts updated; missing queries and bindings added; **`video_no_soundtrack`** added and folded into media cache identity, with Qwen3-VL video formatting and LFM3 visual-boundary normalization aligned. `GenericMTMDChatHandler` only **appends** the new parameter at the end of its signature — **backwards compatible**
+- **GGML enum / graph ABI fixes + tensor API extensions**: shifted op IDs corrected, graph UID field added, optimizer and graph-build enum classes split; FP8 E4M3 definitions, precision enums and batched tensor copy/set/get added. **New `LlamaContext.supports_embd_row` / `set_embeddings_layer_inp_dev`, `LlamaBatchExt.add_embd_row`**
+- **Chatterbox / Drama 3 TTS**: non-streaming Chatterbox Turbo / Multilingual V3 and Drama 3 synthesis, Pocket voices embedded in weights; multilingual backbone CFG metadata and unified KV validated, explicit `n_seq_max` no longer doubled. **Pure TTS, unrelated to the vision path**
+- **Gemma4 shared-KV MTP prefill optimization**: upstream measured prefill **142.5 → 98.9 ms (−30.6%)**, first token −26.4%, end-to-end +3.6% on RTX 5090; **requires an MTP draft model — this plugin uses no speculative decoding, so it does not apply**
+- **SYCL backend gains** (304 llama.cpp commits, 14 SYCL-specific): **plain MMVQ launch triple templating (`#31013`)** and **per-quant concat templating (`#31008`)** — Q4_K single-column takes the XMX path, but **Q6_K / Q5_K single-column stay below `min_cols=2` and keep using plain MMVQ**, so these land directly and are **the source of the ~5% generation gain**; `#31062` bounds reorder temp memory to **32 MiB**; `#31146` relaxes scale to non-contiguous views; `#31110` work-group argmax for short TOP_K rows
+- **⚠️ `#30976` (upstream: Q4_K prefill +14.7%–15.3%) gives this plugin zero benefit — do not expect upstream numbers**: it only optimizes **primed prefill** (prefill after reorder is installed). The source (`ggml-sycl.cpp:5087`) shows reorder is installed **lazily** and only for `src1->ne[1] <= 8` mul_mats, so **prefill's `ne[1]=2048/4032` never triggers it**; and since the plugin builds a fresh `Llama()` per workflow, the flag is reset with the buffer — single-turn image captioning always lands in the *"fresh-layout prefill … **unchanged**"* regime the upstream commit itself calls out. **Measured prefill 1330.03 vs 0.4.3's 1331.59 t/s — flat. By design, not a B580 defect, not a regression**
+- **Other items that do not apply**: `#31125` DPAS flash attention needs a `q4_0`/`q8_0` KV cache (plugin `type_k`/`type_v` default to `auto` = f16); `#30956` is a B70-only comm_exchange (irrelevant on a single B580); `#30358` `set_tensor_2d` targets tensor-split loading (no sharding on one card)
+- **Memory footprint identical to 0.4.3 / 0.4.5**: `SYCL0 compute buffer` **513.02 MiB**, `SYCL_Host` **28.03 MiB**, `matches expectation` across three runs (one cold, two warm) — no growth, no leak
+- **1 new SYCL environment variable**: `GGML_SYCL_FA_DPAS`(1) — DPAS flash attention for quantized KV caches, only effective when the KV cache is `q4_0`/`q8_0`; the **other 29 env vars are unchanged from 0.4.5**, and `GGML_SYCL_ENABLE_GRAPH` still defaults to `0`
+- **⚠️ Self-build note (introduced by upstream `#31076`)**: the Level Zero lookup moved from `find_library` to `pkg_check_modules`, but the fallback branch sits under `if(PkgConfig_FOUND)` — a machine that **has pkg-config but no `level-zero.pc` will silently skip L0 with no warning**. Always check `GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes` in the startup log
+- **⚠️ Known integration note (carried over from 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 / 0.4.5): hybrid vision model + `ctx_checkpoints=0` first-decode crash**
 
 - Symptom: hybrid vision models with SWA layers (e.g. Qwen3.5), on large images (~4000+ vision tokens), prefill succeeds but **first decode token crashes** (`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`)
 - Root cause: caller passing `ctx_checkpoints=0` forces the hybrid model down a "Bypassing rollback" fast-path that has no slot headroom for the first decode token on large prefills
-- **Status in this release: not re-tested on hardware.** Upstream 0.4.4 ships `fix(state): preserve valid prefix reuse with checkpoints disabled`, which is closely related to this validation path and **may well be the fix — but it has not been verified here**; the related `Llama.generate()` code was also largely rewritten (the `llama.py:2174-2178` fast-path from 0.4.3 no longer exists)
+- **Status in this release: still not re-tested specifically.** Upstream 0.4.4 ships `fix(state): preserve valid prefix reuse with checkpoints disabled`, which is closely related to this validation path and **may well be the fix — but it has not been verified here**; 0.4.6 adds another round of safety cleanup around context capacity and sampler lifetime (`n_ctx_seq`, early rejection of oversized embedding inputs, samplers retained until context destruction). All three hardware runs kept `ctx_checkpoints=-1` and did not trigger the issue
 - Workaround: **keep the default `ctx_checkpoints=-1`**
 - **✅ Official recommended plugin fixed**: [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) changed the default to `-1` in `1f0fc15` with a reactive `n_ctx` hint. No manual handling needed when using this plugin
 - **This wheel has no such bug**: pure `llama_cpp.Llama` on the same model + large image at `n_ctx=8192` verified working
 
-**🚀 Measured performance (Qwen3.5-4B vision model + images, 0.4.5):**
+**🚀 Measured performance (Qwen3.5-4B vision model + images, 0.4.6, Intel Arc B580):**
 
-> ⚠️ **Test hardware note**: the test machine was **temporarily swapped to an Intel Arc Pro B70 32GB** (the B580 is not installed right now), and only two images were run for pass/fail validation. The table below lists **absolute numbers for this build only and deliberately avoids any comparison with earlier releases** — B580 vs B70 differ too much in compute (160 → 256 CUs) and memory bandwidth for cross-hardware comparison to mean anything.
+> ✅ **The test machine is back on an Intel Arc B580 Graphics with the exact same driver as 0.4.3** (SYCL 20.1 / `1.17.39894+4` / 160 CUs / `Reorder=Y`), so the tables below include a **strict cross-version comparison**.
 
-| Metric | Small image 1088×1440 (warm) | Large image 1792×2304 (cold) |
+| Metric | Small image 928×1152 (warm) | Large image 1792×2304 (warm) |
 |--------|------------------------------|------------------------------|
-| Vision tokens | 1530 | 4032 |
-| Image encode time | **1120 ms** (clip_encode) | 21670 ms (clip_encode) |
-| Image decode time | **515 ms** (batch 1/1) | 3101 ms (batch 1/2) + 2403 ms (batch 2/2) |
-| Prompt eval | **1756.58 t/s** (886.38 ms / 1557 tokens) | 34.07 t/s (119133.96 ms / 4059 tokens) |
-| Generation speed | **117.45 t/s** (eval 9859.19 ms / 1158 runs) | 111.58 t/s (eval 10871.25 ms / 1213 runs) |
-| Total time | 19.00 s | 165.56 s |
-| load time | 99.41 ms (warm) | 62993.54 ms (cold) |
-| Hybrid checkpoint | host 1×50.25 MiB (pos 64) + device (pos 72 / 1230) | host 1×50.25 MiB (pos 91) + device (pos 99 / 1312) |
+| Vision tokens | 1044 | 4032 |
+| Image encode time | **928 ms** (clip_encode) | **11158 ms** (clip_encode) |
+| Image decode time | 750 ms (batch 1/1) | 1127 ms (1/2) + 1427 ms (2/2) |
+| Prompt eval | 1033.47 t/s | **1330.03 t/s** (3051.80 ms / 4059 tokens) |
+| Generation speed | 94.43 t/s (eval 18351.58 ms / 1733 runs) | **90.66 t/s** (eval 11449.51 ms / 1038 runs) |
+| Total time | 31.77 s | 38.22 s |
+| load time | 131.87 ms | 132.70 ms |
 | SYCL compute buffer | SYCL0 513.02 MiB / SYCL_Host 28.03 MiB | same as left |
 
-> Test scene: Qwen3.5-4B-Uncensored + mmproj-BF16, hybrid architecture (with SWA layers), `ctx_checkpoints=-1`, `n_ctx=8192`, `n_batch=2048` (large image fed as `2048 + 1984`).
+**Against 0.4.3, same image and same token count** (1792×2304 / 4032 tokens, both warm):
+
+| Item | 0.4.3 | 0.4.6 | Δ |
+|------|-------|-------|---|
+| Prompt eval | 1331.59 t/s | 1330.03 t/s | **flat (−0.12%)** |
+| Generation speed | 85.59 t/s | 90.66 t/s | **+5.9%** |
+| Image encode | 11030 ms | 11158 ms | +1.2% (noise) |
+| Total time | 40.58 s | 38.22 s | −5.8% |
+
+> Test scene: Qwen3.5-4B-Uncensored-Q4_K_M + mmproj-BF16, hybrid architecture (with SWA layers), `ctx_checkpoints=-1`, `n_ctx=8192`, `n_batch=2048` (large image fed as `2048 + 1984`).
 >
-> **The large image is a cold run** (`load time` 62993.54 ms): its 34.07 t/s prompt eval carries the one-off SYCL kernel JIT and oneDNN primitive creation cost (a second run of the same image returns to warm-run levels), so it is **not comparable to the warm small-image column**. The small image's 99.41 ms `load time` is warm steady state.
+> **Flat prefill is expected**: `#30976`'s +14.7% applies only to primed prefill after reorder is installed (see above); this plugin builds a fresh model instance each run, which is the "unchanged" case the upstream commit itself documents.
 >
-> For version-to-version conclusions, re-measure on a B580 and record separately — **do not cite this table for cross-hardware or cross-version comparisons**.
+> **The cold-run figure (182.98 s) is not meaningful**: on a brand-new DLL, `load time` hits 65.9 s and prompt eval drops to 33.76 t/s — all three stages degrade together by 1.7–12.6× because Level Zero's program cache is fully invalidated and every kernel is re-JITed. **That cost is one-off**; the second run returns to the numbers above.
 
 **Community feedback:**
 
 > ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** — vision model compatibility confirmed
 > See: https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
 
-**Wheel**: `llama_cpp_python-0.4.5+sycl-cp313-cp313-win_amd64.whl` (~**42 MB**, slim build, requires oneAPI 2026.1)
+**Wheel**: `llama_cpp_python-0.4.6+sycl-cp313-cp313-win_amd64.whl` (~**43 MB**, slim build, requires oneAPI 2026.1)
 
 ---
 
@@ -89,7 +98,7 @@ pip uninstall llama-cpp-python -y
 #### Step 2: Install the New Wheel
 
 ```bat
-pip install llama_cpp_python-0.4.5+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.6+sycl-cp313-cp313-win_amd64.whl
 ```
 
 #### Step 3: Update Your ComfyUI Plugin
@@ -202,6 +211,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | Version | File | Size |
 |---------|------|------|
+| 0.4.6 | `llama_cpp_python-0.4.6+sycl-cp313-cp313-win_amd64.whl` | ~43 MB |
 | 0.4.5 | `llama_cpp_python-0.4.5+sycl-cp313-cp313-win_amd64.whl` | ~42 MB |
 | 0.4.3 | `llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl` | ~39 MB |
 | 0.4.2 | `llama_cpp_python-0.4.2+sycl-cp313-cp313-win_amd64.whl` | ~37 MB |
@@ -234,7 +244,7 @@ Download from [Releases](https://github.com/allanmeng/llama-cpp-python-sycl-wind
 
 ```bat
 pip uninstall llama-cpp-python -y
-pip install llama_cpp_python-0.4.5+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.6+sycl-cp313-cp313-win_amd64.whl
 ```
 
 Uninstalling first ensures a clean state.

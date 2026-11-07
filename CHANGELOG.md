@@ -1,4 +1,79 @@
 # Changelog
+## [0.4.6+sycl] - 2026-11-07
+
+### Changed from JamePeng (upstream 0.4.6)
+
+升级至 llama-cpp-python 0.4.6（基于 JamePeng `1dd04be`；距 0.4.5 的 `3fc39b2` 共 **30 个提交**，其中 `ec56af2` 仅提升版本号、`1dd04be` 仅修 macOS CI 的 Metal 后端注册检查，**Python 与原生代码零变化**）。上游 CHANGELOG 段头 `[0.4.6] Chatterbox & Drama 3 TTS, Faster Speculative Decoding, and Native API Alignment & Fixes`。关键改动（来自 JamePeng CHANGELOG）：
+
+- **Gemma4 shared-KV MTP prefill 优化（投机解码）**：改用 masked target NextN 输出、跳过无输出批次的 hidden-state 读取、按原始 batch 索引访问稀疏 prefill 输出；非 shared MTP 与完整验证行仍走 dense catch-up，无输出媒体回调不保留陈旧缓冲。上游 RTX 5090 实测 1076-token prompt prefill 142.5 → 98.9 ms（**−30.6%**）、首 token 164.2 → 120.9 ms（−26.4%）、端到端 140.4 → 145.4 tok/s（+3.6%），256-token 输出与草稿接受率不变。**需 MTP 草稿模型；本插件未使用投机解码，不命中。**
+- **DFlash 设备侧特征传输**：跨 Win/Linux/macOS 绑定可选 device-feature 扩展，为 `LlamaBatchExt` 增加 context-bound device row 引用；兼容路径改用原生 device buffer 传输 target 特征，保留源行索引。上游 RTX 5090 实测 Qwen3.6-27B+DFlash 137.6 → 147.3 tok/s（+7.0%）、Qwen3.8-27B+DSpark 68.9 → 71.8 tok/s（+4.3%）。**需投机解码，不命中。**
+- **Chatterbox / Drama 3 TTS**：新增非流式 Chatterbox Turbo / Multilingual V3（参考音频或预置音色、token 采样、默认音色选择）；校验多语言 backbone 的 CFG 元数据、成对序列与统一 KV，保留显式 `n_seq_max` 不再翻倍；Drama 3 采用 helper 管理采样、speaker tag 与模型专属校验；Pocket TTS 允许从权重内嵌音色、拒绝参考音频与音色冲突。**纯 TTS 功能，与本构建的视觉推理路径无关。**
+- **MTMD 音视频 ABI 对齐**：更新 audio stream、generation input/info、video、clip 参数布局，移除过时的 audio 布局探测；补齐缺失的 audio 查询、生成输出模式、音色查询、tensor 读取、reference-state 装配与 video 配置/模板绑定；能力探测集中化并保留可选查询缺失时的回退；新增 `video_no_soundtrack` 并纳入媒体缓存标识，对齐 Qwen3-VL 视频格式与 LFM3 视觉边界归一化；chunk 序列化要求可写缓冲，禁止写入不可变 `bytes`。**对应包内 `llama_multimodal.py` / `mtmd_cpp.py` 改动**；`GenericMTMDChatHandler` 仅在签名末尾追加 `video_no_soundtrack=None`，**向后兼容，插件无需改动**。
+- **GGML enum / graph ABI 修正与 tensor API 扩展**：修正偏移的 op ID、为 graph 增加 UID 字段、拆分 optimizer 与 graph-build 枚举类；新增 FP8 E4M3 定义、precision 枚举、批量 tensor copy/set/get 绑定，以及 indexed flash attention 与 rank 通信回调；原生 tensor 传输回归改用 backend 对齐缓冲以避免对齐崩溃。**新增 `LlamaContext.supports_embd_row` / `set_embeddings_layer_inp_dev`、`LlamaBatchExt.add_embd_row`**（本构建已验证可用）。
+- **context 单序列预算与采样器安全清理**：`n_ctx()` 保留为原生**总容量**，新增 **`n_ctx_seq()`** 用于生成、context shifting 与多模态容量检查；`truncate=False` 的超限 embedding 输入提前拒绝，合并 embedding 批次按总 KV 容量设界；采样器变更与 target/draft 重置同步到共享 KV 清理之前，原生拒绝后对齐采样器归属，detach 失败时保留至 context 析构；失败时释放部分初始化的采样器与 MTP 资源。**行为变化仅在 `n_seq_max > 1` 且 `kv_unified=False` 时出现**（每序列窗口变小）；本插件不传 `n_seq_max`（默认 1），**不受影响**。
+- **llama.cpp 同步**：`vendor/llama.cpp` 由 `74bca39` 推进至 `18ab62a8e`（llama.cpp **`b11870`** → **`b12174`**，2026-11-06；子模块跨 **304 个提交**）。SYCL 侧 **14 项**，按本机 Q4_K_M + B580 逐项判断：
+  - **命中本机路径**：**`#31013` plain MMVQ launch 三元组模板化**、**`#31008` per-quant concat 模板化**（Q4_K 单列走 XMX，但 **Q6_K / Q5_K 单列因 `min_cols=2` 不走 XMX，仍走普通 MMVQ** → 这两条是本次生成速度提升的来源）；`#31325` dmmv 代码清理；`#31062` reorder 临时内存上限收到 **32 MiB**（降低加载期峰值占用）；`#31146` 放宽 scale 到非连续视图（ggml 核心）；`#31110` 短 TOP_K 行的 work-group argmax（采样开销）。
+  - **不命中**：**`#30976` reorder 布局反量化向量化** —— 详见下方性能段，它只优化 **primed prefill**，本插件每次新建模型实例走 fresh layout，**实测零收益**；`#31125` 量化 KV cache 的 DPAS flash attention（需 `q4_0` / `q8_0` KV cache，插件 `type_k` / `type_v` 默认 `auto` = f16）；`#30956` B70 专用 comm_exchange（B580 单卡无关）；`#31120` f32↔q2_0/q4_0/q5_0 的 CPY 取整修正（精度，本模型无 Q4_0 主权重）；`#30358` `set_tensor_2d` 加速 tensor-split 加载（单卡无分片）；`#30761` FLASH_ATTN_EXT 失败修复；`#31605` docker 修复、`#31076` Level Zero 的 pkg-config 查找（均为构建侧）。
+
+### Changed (this build)
+
+- **零本地补丁**：本构建**未应用任何本地 patch**（`patches/` 下两个补丁自 0.3.49 起已作废，上游已正式修复，**后续发版不要再 apply**）。
+- **打包方式为精简版（方案 A）**：whl **不自包含 oneAPI 运行时**，移除与 oneAPI 重复的 DLL（`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`），whl 体积 **43.3 MiB（45,447,114 B）**，0.4.5 为 42.0 MiB（44,059,015 B）。**部署目标机需预装 Intel oneAPI**。
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。
+- **与 0.4.5 逐条目对拍**：包内条目数一致（**49 个条目 / 26 个 `.py` / 15 个 DLL 路径**，`llama_cpp/bin/` 与 `llama_cpp/lib/` 各一份为既有结构），`.py` **零新增零删除**，其中 **8 个文件有内容变化**（`__init__.py`、`_ggml.py`、`_internals.py`、`llama.py`、`llama_cpp.py`、`llama_multimodal.py`、`llama_speculative.py`、`mtmd_cpp.py`）；DLL 变化：`ggml-sycl.dll` 74,067,456 → **75,746,304 B（+1.60 MB）**、`mtmd.dll` +223 KB、`llama.dll` +136 KB、`llama-common.dll` +63.5 KB、`ggml-cpu.dll` +30 KB、`ggml-base.dll` +25 KB；`ggml.dll` 与 `libomp140.x86_64.dll` 字节数不变。whl 内 DLL 与本机 `site-packages` 逐字节一致（md5 校验通过）。whl md5 = `aac50548976c9dc62d0baf04d8322833`。
+- **插件兼容性零改动（AST 逐函数比对）**：`Llama.__init__` **75 个参数**、`create_chat_completion` **58 个参数**、`GenericMTMDChatHandler.__init__` 6 个参数全部与 0.4.5 一致；`MTMDChatHandler` / `MTMDBaseHandler` 仅在末尾**追加** `video_no_soundtrack=None`，向后兼容。[comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) **无需任何改动**。
+- **显存工作集与 0.4.3 / 0.4.5 完全一致**：`SYCL0 compute buffer size` = **513.0216 MiB**、`SYCL_Host compute buffer size` = **28.0254 MiB**，三次运行（冷 + 两次热）均 `matches expectation`，**未增长、无泄漏**。
+- **构建配置**：零错误一次通过（10 分 11 秒）。宏状态 `GGML_SYCL_SUPPORT_XMX: yes`、`GGML_SYCL_GRAPH: yes`、`GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes`、`GGML_SYCL_SUPPORT_VMM: yes`、`GGML_SYCL_F16: no`（决定 `GGML_SYCL_DYNAMIC_PRECISION: F32`，与历版一致）。
+- **⚠️ Level Zero 构建注意（上游 `#31076` 引入）**：0.4.6 把 L0 的查找从 `find_library` 改成 `pkg_check_modules`，但回退分支挂在 `if(PkgConfig_FOUND)` 上 —— 若机器**装了 pkg-config 却找不到 `level-zero.pc`，会静默跳过 L0 而不报警**。本机无 pkg-config，走原有 fallback，实测 `GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes`。**自建时请务必检查该行输出。**
+- **新增 SYCL 调优项**：环境变量 1 个 —— **`GGML_SYCL_FA_DPAS`**（默认 `1`，量化 KV cache 的 DPAS flash attention 开关，需 KV cache 为 `q4_0` / `q8_0` 才实际生效）。其余 **29 个 env 与 0.4.5 完全一致**（含 `GGML_SYCL_ENABLE_XMX_ESIMD`、`GGML_SYCL_XMX_MAX_COLS`、`GGML_SYCL_GRAPH_EVICTION_TIMEOUT`），**`GGML_SYCL_ENABLE_GRAPH` 仍默认 `0`**（graph 录制/重放不自动生效）。
+- **handler 验证**：`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / `Qwen35ChatHandler` / `GenericMTMDChatHandler` / `Qwen3ASRChatHandler` / `MTMDBaseHandler` / `MTMDAudioGenerator` 七件套全部可正常导入。注意 `MTMDBaseHandler`、`MTMDAudioGenerator` 仅在 `llama_cpp.llama_multimodal` 中导出，**`llama_chat_format` 未做重导出**；`LlamaChatCompletionHandlerRegistry` / `MTMDChatHandler` / `Llava15ChatHandler` 等同样位于 `llama_chat_format`，**不在顶层 `llama_cpp` 导出面**（历次核对均为此结果，非缺失）。
+- **⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 / 0.4.5）**：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃问题，**本版未做专项复测**（三次真机跑均沿用 `ctx_checkpoints=-1`）。**建议继续沿用 `ctx_checkpoints=-1`**；插件自 `1f0fc15` 起已默认 `-1` 并带响应式 `n_ctx` hint。**本 wheel 本身不涉及该问题。**
+- **设备侧 checkpoint 的日志显示瑕疵（延续 0.4.5，不影响功能）**：`saved device checkpoint ... size=0.00 MiB`，而紧邻上一行 `~llama_io_write_device: allocated 'SYCL0' buffer 50.250 MiB` 证明实际已分配 50.25 MiB —— 设备路径未填 size 统计字段，属打印问题，显存核算不受影响。
+- **`find_slot: non-consecutive token position` 告警为非回归**：该告警在 0.4.3 / 0.4.5 日志中同样存在，源自图像 chunk 的 batch 分段解码，属既有行为，本版未新增。
+
+### Performance (measured, Intel Arc B580)
+
+> 本版测试机已换回 **Intel Arc B580 Graphics**，且**驱动与 0.4.3 完全一致**（SYCL 20.1 / `1.17.39894+4` / 160 CU / `Reorder=Y`），因此本段**可以做严格的跨版本对比**，对比基线为 0.4.3 同图热跑。
+
+**Qwen3.5-4B-Uncensored-Q4_K_M + mmproj-BF16**（`n_ctx=8192`、`n_batch=2048`、`ctx_checkpoints=-1`、`memory_cleanup=full_cleanup`）：
+
+| 指标 | 小图 928×1152（热） | 大图 1792×2304（热） | 大图 1792×2304（冷，仅备查） |
+|------|--------------------|----------------------|------------------------------|
+| 视觉 token 数 | 1044 | 4032 | 4032 |
+| 图像编码 `clip_encode` | 928 ms | **11158 ms** | 26948 ms |
+| 图像解码 | 750 ms（1/1） | 1127 + 1427 ms | 1535 + 1438 ms |
+| `prompt eval` | 1033.47 t/s | **1330.03 t/s**（3051.80 ms / 4059 tok） | 33.76 t/s（含全量 JIT） |
+| 生成 | 94.43 t/s（1733 runs） | **90.66 t/s**（11449.51 ms / 1038 runs） | 89.89 t/s（1313 runs） |
+| 总耗时 | 31.77 s | 38.22 s | 182.98 s |
+| `load time` | 131.87 ms | 132.70 ms | 65891.55 ms |
+| SYCL 计算缓冲 | 513.0216 / 28.0254 MiB | 同左 | 同左 |
+
+**与 0.4.3 的严格同图同 token 对比**（1792×2304 / 4032 tokens，均为热跑）：
+
+| 项 | 0.4.3 | 0.4.6 | Δ |
+|----|-------|-------|---|
+| `prompt eval` | 1331.59 t/s | **1330.03 t/s** | **−0.12%（持平）** |
+| 生成 | 85.59 t/s | **90.66 t/s** | **+5.9%**（同 runs 口径的冷跑数据为 89.89 → **+5.0%**） |
+| `clip_encode` | 11030 ms | 11158 ms | +1.2%（噪声） |
+| 总耗时 | 40.58 s | 38.22 s | −5.8% |
+| SYCL 计算缓冲 | 513.0216 / 28.0254 MiB | 同左 | 一致 |
+
+> **为什么 prefill 没有提升（重要，勿误读上游数据）**：`#30976`（reorder 布局反量化向量化）在上游是 **+14.7%~15.3% pp512/pp2048 on Q4_K**，但其 commit 原文对每个量化类型都标注了前提 —— *"**primed prefill**（prefill after decode on a reorder-installed tensor）… **fresh-layout prefill, decode and PPL unchanged**"*。源码侧确认（`ggml/src/ggml-sycl/ggml-sycl.cpp:5087` `should_reorder_tensor()`）：reorder 只在 `src1->ne[1] <= 8` 的 mul_mat（即 decode 或 ≤8 列的短批）上惰性安装，注释写明 *"Used to decode/dequan in **next steps**"*；**prefill 的 `ne[1] = 2048/4032` 永远不触发 reorder**，权重保持 fresh layout。而本插件每轮工作流都新建 `Llama()` 实例（`load time` 130 ms 即重载证据），reorder 标志随 buffer 重建而清零 —— 因此**单轮图像描述这一用法永远落在 "fresh-layout prefill ... unchanged" 区间**。这是设计使然，**不是 B580 的缺陷，也不是回归**。要吃到该优化，需在**同一模型实例内**先 decode、再 prefill（多轮对话且不重建模型），本版未验证。
+>
+> **为什么生成快了**：Q4_K 单列走 XMX int8 DPAS，但 Q4_K_M 中的 **Q6_K / Q5_K 张量单列因 `min_cols=2` 不走 XMX，仍走普通 MMVQ** —— `#31013`（MMVQ launch 模板化）、`#31008`（per-quant concat 模板化）与 `#31325`（dmmv 清理）正好命中该路径，故生成速度稳定提升约 5%。
+>
+> **冷跑数据为何作废**：大图首跑 `load time` 65.9 s、`clip_encode` 26.9 s、`prompt eval` 33.76 t/s，三条链路同向劣化 1.7~12.6 倍，原因是**全新 DLL 使 Level Zero 的 program cache 全部失效、kernel 被全量重新 JIT**（0.4.3 当日的"冷跑"仅模型不在 page cache，kernel 缓存仍然命中）。该成本**一次性**，第二次运行即回到热跑量级（31.77 s / 38.22 s）。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | 2026.1 |
+| GPU | Intel Arc B580 Graphics（160 CU / 12526 MB / `Reorder=Y`） |
+| SYCL runtime / driver | 20.1 / 1.17.39894+4 |
+| 构建工具链 | Visual Studio 2022 BuildTools 17.14.27 + oneAPI `icx`（`-fsycl`） |
+
 ## [0.4.5+sycl] - 2026-10-26
 
 ### Changed from JamePeng (upstream 0.4.5)
