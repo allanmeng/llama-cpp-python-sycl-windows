@@ -1,4 +1,101 @@
 # Changelog
+## [0.4.7+sycl] - 2026-11-13
+
+> ### ⚠️ 升级本版前，请先把 Intel oneAPI 更新到 2026.2
+>
+> 本 wheel 由 **oneAPI 2026.2**（clang 23）编译，其 `ggml-sycl.dll` 新增导入 **`mkl_intel_thread.3.dll`** 等运行库。**若目标机仍是 2026.1 或更早，SYCL 后端会加载失败并「静默回退 CPU」——不报错、不提示，只是速度断崖式下降。**
+>
+> 📥 **oneAPI 2026.2 下载**
+>
+> - 官方地址：https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html
+> - 网盘备用：https://pan.quark.cn/s/be61433cc224
+>
+> 安装前请先完全退出 ComfyUI 等调用该库的程序；安装完成后**重启**，并确认启动脚本中仍有 `call setvars.bat`。正常启动日志应出现 `GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes` 与设备 `[level_zero:gpu:0] Intel Arc ...`。
+
+### Changed from JamePeng (upstream 0.4.7)
+
+升级至 llama-cpp-python 0.4.7（基于 JamePeng `c7c7055`；距 0.4.6 的 `1dd04be` 共 **16 个提交**，其中 `c7c7055` 仅提升版本号、`48f9e5f` / `53307b7` / `8861bb1` / `fc174e6` / `6751fef` 五个仅推进子模块指针，其余 10 个为实际代码改动）。上游 CHANGELOG 段头 `[0.4.7] MTP Device States, Extra GGUF Shards, and Native API Alignment`。关键改动（来自 JamePeng CHANGELOG）：
+
+- **MTP 设备侧 hidden-state 传输（本版主线）**：非 shared MTP 的 catch-up 状态改为借用设备行提交，仅把待决 hidden 行拷回 host；保留接受率与回滚状态。shared-KV assistant、chained heads 与不支持的原生后端仍走 host 捕获，可用 **`LLAMA_MTP_DEV=0`** 强制 host 路径；新增 **`draft_n_ubatch`** 配置草稿物理微批大小。**本插件不使用投机解码，不命中。**
+- **额外 GGUF 分片与外部 PLE 表**：新增 `Llama(model_shards=...)` 与 `SpecConfig.draft_model_shards`，可为主模型追加兼容的附属模型文件（主模型须排首位）；路径做校验与去重、保留 UTF-8 文件名、分片设置经构造器序列化保留。**单文件部署不命中，新增参数向后兼容。**
+- **bindings 与原生导出对齐**：补可选 NextN device-state、architecture-capability、decision-label 绑定，并配 MSVC / Mach-O / ELF 三套符号别名；修正量化 enum 返回类型；context 参数对齐 **`moe_cache_cpu_share`** 并暴露其校验后的高层设置，draft context 保持 MoE 缓存禁用。**`Llama.__init__` 参数总数仍为 76，与本插件签名完全兼容。**
+- **RPC protocol 9 预检对齐**：接受兼容的 protocol 9 服务端而非当作版本不符拒绝，保留原生 major/minor 兼容检查；补充握手分片、不兼容版本与空设备列表的覆盖。**单机运行不命中。**
+- **MTMD 音频 ABI 与流式重采样器**：对齐原生音频输入 `temp` 字段、TTS 温度收敛为单一可选设置（缺省时保留模型默认）；新增 mono float32 PCM 重采样器 init/process/free 绑定（含输出所有权与透传别名说明）；多模态提示中识别 **Kimi K3.1** 图像占位符。**落在包内 `llama_multimodal.py`（+660 B）与 `mtmd_cpp.py`（+1,651 B），`GenericMTMDChatHandler.__init__` 仍为 6 参数，插件无需改动。**
+- **grammar 对齐**：支持数值 `allOf` 交集、拒绝空整数区间、统一 128 层转换上限；修正国际象棋与日本将棋规则并同步 JSON 数组规则。**`llama_grammar.py` 首次出现内容变化（55,916 → 58,818 B，+2,902 B）**，0.4.6 时该文件零改动。
+- **⚠️ vendor pin 语义（自建者必读）**：上游明确把 `vendor/llama.cpp` 钉在 **`2a4daf0e0`**，即位于 `ggml : prune`（`29dbbad2b`）与 `llama : prune`（`8ca5a8008`）**之前**，并注明 *"Native distributions must be rebuilt from this revision to match the updated context and audio parameter ABIs."* —— **本构建正是基于该修订编译**，不要改用更晚的 prune 提交重编，否则 context 与音频参数 ABI 会与 Python 绑定不匹配。
+- **llama.cpp 同步**：`vendor/llama.cpp` 由 `18ab62a` 推进至 `2a4daf0e0`（llama.cpp **`b12174`** → **`b12345`**，2026-11-12；子模块跨 **171 个提交**）。SYCL 侧 **13 项**（触及 `ggml/src/ggml-sycl` 的 12 个提交 + 打包侧 `#32005`），按本机 Q4_K_M + B580 逐项判断：
+  - **直接命中（打包侧，本版关键）**：**`#32005` 为 Windows SYCL 发布包补充缺失的 MKL 运行时 DLL** —— 上游同样发现了这个问题。oneAPI 2026.2 编出的 `ggml-sycl.dll` 新增导入 **`mkl_intel_thread.3.dll`**（以及 `libimalloc.dll` / `tbb12.dll` / `libiomp5md.dll`），缺失时 `LoadLibrary` 直接失败、SYCL 后端被静默跳过并回退 CPU。本构建按方案 A 把它一并列入剔除项（详见下方打包段），由目标机的 oneAPI 提供。
+  - **命中本机（防护 / 稳定性 / 正确性）**：**`#31285` 拒绝超出显存的设备缓冲 + 新增 `GGML_SYCL_BMG_VRAM_CHECK`（默认 `1`）** —— 仅对 **BMG 架构** + `GGML_SYCL_MEM_BUFFER` 类型的分配生效，超出时打印 `cannot allocate ... MiB: ... MiB usable` 并**拒绝分配**（而非让驱动崩溃），**B580 属 BMG，本版默认生效**；**`#31138` oneDNN FA cache 线程安全化并 memoize 运行时失败**（本机 `GGML_SYCL_FA_ONEDNN: 1`，命中）；**`#31784` 修复 SYCL `CLAMP` 对 strided view 的支持**（视觉投影链路可能命中，属正确性修复）；**`#31896` MUL_MAT src1 精度 gating** —— 把 `dst->op_params[3]` 换成 `ggml_prec_get_src(dst, 1)`、`op_params[0] == GGML_PREC_DEFAULT` 换成 `ggml_prec_get_acc(dst) == GGML_PREC_UNDEFINED`，并在 `device_supports_op` 中拒绝 src1 精度为 BF16 / F32 的 MUL_MAT，本机 `DYNAMIC_PRECISION: F32` 且标准推理不设精度标注，**路径不变**；`#31126` / `#32013` 缓存 device-id（单卡仅有微优化，无可测收益）。
+  - **不命中**：`#31873` AOT 超 4GB 修复（本机走 JIT，无 AOT 产物）；`#30156` 设备侧 MoE 调度器（dense 模型，`GGML_SYCL_MMID_SCHED: 1` = DEVICE 但无 MoE 不触发）；`#31574` 为 **Alchemist（DG2 / A770）** 在 `head_dim=64` 解禁 oneDNN fused SDPA —— **B580 是 Battlemage，不适用**；`#30802` YaRN 截断配置（`n_ctx=8192` 未启用 YaRN）；`#30857` `SWIGLU_OAI` 的 f16 支持（本构建 `GGML_SYCL_F16: no`，且 Qwen 走标准 SWIGLU）；`#31465` CPY 到 Q4_1 / Q5_1 / Q8_0 的精确舍入（本模型无这些类型主权重，属精度）。
+  - **⚠️ 一条易误读**：`#31084`（CUDA / Metal radix Top-K 确定性）在本仓库中**不含任何 SYCL 代码改动**（改动仅 `ggml-cuda`、`ggml-metal` 与测试），不应计入 SYCL 项。
+
+### Changed (this build)
+
+- **零本地补丁**：本构建**未应用任何本地 patch**（`patches/` 下两个补丁自 0.3.49 起已作废，上游已正式修复，**后续发版不要再 apply**）。
+- **🆕 打包方式为精简版（方案 A），剔除项由 5 个增至 6 个**：新增剔除 **`mkl_intel_thread.3.dll`**（**38.95 MiB**）—— oneAPI 2026.2 编出的 `ggml-sycl.dll` 新增依赖它，若随包分发会让 whl 从 **43 MiB 直接翻到约 84 MB**。完整剔除名单：`dnnl.dll`、`mkl_core.3.dll`、`mkl_sycl_blas.6.dll`、`mkl_tbb_thread.3.dll`、`tbb12.dll`、`mkl_intel_thread.3.dll`。**部署目标机需预装 Intel oneAPI，并由 `setvars.bat` 把 oneAPI 运行库目录放入 `PATH`。**
+  - **实测确认**：剔除后在本机（`setvars.bat` 环境）SYCL 后端正常加载 —— `SYCL_DEVICE=YES`、`L0_FOUND=YES`、设备枚举为 `[level_zero:gpu:0] Intel Arc B580 Graphics`、`Reorder=Y`，未回退 OpenCL / CPU，生成速度与 0.4.6 持平（见性能段）。
+  - **⚠️ 必须保留 `setvars.bat`**：若启动脚本去掉 `setvars.bat`，上述被剔除的 DLL 无人提供，`ggml-sycl.dll` 会加载失败并**静默回退 CPU**，且不会有醒目的报错。曾尝试「免 setvars」方案（补齐 12 个 DLL + 调整 `lib/` 加载路径），已实测否决：B580 在 2026.2 上要求 **Level Zero v2 adapter**，而 `ur_adapter_level_zero_v2.dll` 报 **error 127（入口点缺失）**，退回 `[opencl:gpu:0]`；且把 `ur_win_proxy_loader.dll` 放进 `lib/` 会改变 UR loader 的搜索路径，反而破坏正常配置。**结论：维持精简 whl + 强制 `setvars.bat`。**
+- **`libomp140.x86_64.dll` 保留在 whl 中**：OpenCL/OpenMP 预加载修复依赖包内自带的该 DLL，不可删除。其来源是 **VS 2022 VC Redist（`Microsoft.VC143.OpenMP.LLVM`）**，与 oneAPI 版本无关，**不受本次 oneAPI 升级影响**（字节数与 0.4.6 完全一致）。
+- **oneAPI 2026.2 编译迁移**：编译器由 oneAPI 2026.1 的 clang **22** 升至 2026.2 的 clang **23**（`icx` 2026.2.0 Build 20261001）。**构建参数无需改动**，`build_install.bat` 仍旧 `call setvars.bat`；随附的 oneDNN 仍为 **3.13.2**（`dnnl/latest` 指向 2026.1，oneAPI 2026.2 安装包内**没有** 2026.2 版 oneDNN 目录），运行时 DLL 名称未变。
+- **与 0.4.6 逐条目对拍**：包内条目数一致（**49 个条目 / 26 个 `.py` / 15 个 DLL 路径**，`llama_cpp/bin/` 与 `llama_cpp/lib/` 各一份为既有结构），`.py` **零新增零删除**，其中 **9 个文件内容变化**：`llama_cpp.py`（+8,227 B）、`_internals.py`（+5,313 B）、`llama_speculative.py`（+5,499 B）、`llama_grammar.py`（+2,902 B，0.4.6 为零改动）、`mtmd_cpp.py`（+1,651 B）、`llama.py`（+1,071 B）、`llama_multimodal.py`（+660 B），以及 **`__init__.py`、`_rpc.py` 字节数不变但 md5 变化**（版本字符串 / 空白差异，非逻辑改动）。
+  - DLL 变化：**`ggml-sycl.dll` 75,746,304 → 75,456,512 B（−289,792 B / −283 KB，本版唯一缩小的 DLL）**、`llama-common.dll` +65,536 B、`mtmd.dll` +41,984 B、`llama.dll` +40,960 B、`ggml-cpu.dll` +14,848 B、`ggml-base.dll` +3,072 B、`ggml.dll` −512 B；`libomp140.x86_64.dll` 字节数完全不变。
+  - **whl 体积 43.34 MiB（45,447,114 B）→ 43.13 MiB（45,220,961 B）**，md5 = `cbede18e0214fadc5c980d773a9e43ac`。whl 内 DLL 与本机 `site-packages` 逐字节一致，**6 个应剔除 DLL 无任何残留**（`dnnl` / `mkl_core.3` / `mkl_sycl_blas.6` / `mkl_tbb_thread.3` / `tbb12` / `mkl_intel_thread.3` 全部不在包内）。
+- **插件兼容性零改动（AST 逐函数比对）**：`Llama.__init__` **76 个参数**、`create_chat_completion` **55 个参数**、`GenericMTMDChatHandler.__init__` **6 个参数**，三项与 0.4.6 **完全一致**。[comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) **无需任何改动**。
+- **新增 API 位置核实（易踩坑）**：`LlamaModel.suppress_tokens` / `LlamaModel.classifier_free_guidance` / `LlamaContext.supports_embd_row` / `LlamaContext.set_embeddings_layer_inp_dev` 均已验证可用，但**全部位于 `llama_cpp._internals`**；顶层 `llama_cpp` **不导出** `LlamaModel` / `LlamaContext`（`dir(llama_cpp)` 中与 Model 相关者仅 `LlamaDraftModel` / `LlamaModelKVOverrideType` / `LlamaModelMetaKey`）。**写探测脚本时不可用 `hasattr(llama_cpp.LlamaModel, ...)` 判断，否则会误报缺失。**
+- **显存工作集与 0.4.3 / 0.4.5 / 0.4.6 完全一致**：`SYCL0 compute buffer size` = **513.0216 MiB**、`SYCL_Host compute buffer size` = **28.0254 MiB**，冷热两次运行均 `matches expectation`，**未增长、无泄漏**。新增的 BMG VRAM 检查（`GGML_SYCL_BMG_VRAM_CHECK=1`）在本次 4032-token 大图下**未触发拒绝**，分配正常通过。
+- **构建配置**：零错误一次通过（**10 分 28 秒**）。宏状态 `GGML_SYCL_SUPPORT_XMX: yes`、`GGML_SYCL_GRAPH: yes`、`GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes`、`GGML_SYCL_SUPPORT_VMM: yes`、`GGML_SYCL_DNNL: yes`、`GGML_SYCL_F16: no`（决定 `GGML_SYCL_DYNAMIC_PRECISION: F32`，与历版一致）。
+- **⚠️ 构建环境注意（本机复现，备查）**：`-fsycl` 设备侧编译在 `fattn-vec-instance-q4_0-f16.cpp` 处**第二次出现死锁**（进程 CPU 零增长、构建目录停止更新，两次采样间隔 15 秒完全不变），`taskkill /F /T` 清理整棵进程树后在沙箱外重跑即通过。此现象与 0.4.5 记录的链接期死锁同源，**不是代码问题**。
+- **新增 SYCL 环境变量 2 个**：**`GGML_SYCL_BMG_VRAM_CHECK`**（默认 `1`，仅 BMG + `GGML_SYCL_MEM_BUFFER` 分配时检查可用显存，超出则拒绝并报错，可用 `0` 关闭）、**`GGML_SYCL_MMID_SCHED`**（默认 `1` = `GGML_SYCL_MMID_SCHED_DEVICE`，设备侧 MoE 调度，仅 MoE 模型生效）。按源码引用统计，环境变量总数 **40 → 42**，**无移除**；其余（含 `GGML_SYCL_FA_DPAS`、`GGML_SYCL_ENABLE_XMX_ESIMD`、`GGML_SYCL_XMX_MAX_COLS`、`GGML_SYCL_GRAPH_EVICTION_TIMEOUT`）默认值不变，**`GGML_SYCL_ENABLE_GRAPH` 仍默认 `0`**（graph 录制/重放不自动生效）。
+- **handler 验证**：`Qwen3VLChatHandler` / `Qwen25VLChatHandler` / `Qwen35ChatHandler` / `GenericMTMDChatHandler` / `Qwen3ASRChatHandler` / `MTMDBaseHandler` / `MTMDAudioGenerator` 七件套全部可正常导入。注意 `MTMDBaseHandler`、`MTMDAudioGenerator` 仅在 `llama_cpp.llama_multimodal` 中导出，**`llama_chat_format` 未做重导出**（历次核对均为此结果，非缺失）。
+- **⚠️ 已知集成注意（延续 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 / 0.4.5 / 0.4.6）**：hybrid 视觉模型 + `ctx_checkpoints=0` 首 decode 崩溃问题，**本版仍未做专项复测**（两次真机跑均沿用 `ctx_checkpoints=-1`）。**建议继续沿用 `ctx_checkpoints=-1`**；插件自 `1f0fc15` 起已默认 `-1` 并带响应式 `n_ctx` hint。**本 wheel 本身不涉及该问题。**
+- **设备侧 checkpoint 的日志显示瑕疵（延续 0.4.5 / 0.4.6，不影响功能）**：`saved device checkpoint ... size=0.00 MiB`，而紧邻上一行 `~llama_io_write_device: allocated 'SYCL0' buffer 50.250 MiB` 证明实际已分配 50.25 MiB —— 设备路径未填 size 统计字段，属打印问题，显存核算不受影响。
+- **`find_slot: non-consecutive token position` 告警为非回归**：该告警在 0.4.3 / 0.4.5 / 0.4.6 日志中同样存在，源自图像 chunk 的 batch 分段解码，属既有行为，本版未新增。
+
+### Performance (measured, Intel Arc B580)
+
+> 测试机为 **Intel Arc B580 Graphics**，驱动与 0.4.6 完全一致（SYCL 20.1 / `1.17.39894+4` / 160 CU / `Reorder=Y`），硬件侧无变量。**⚠️ 但本次热跑所用的图与 0.4.6 基线不是同一张**（0.4.7 热跑为 **2336×1760 / 4015 tokens**，0.4.6 基线为 **1792×2304 / 4032 tokens**），因此**只对速率类指标做 Δ 对比，不对 `clip_encode` 与总耗时做跨版本横比**。同图对比（1792×2304 / 4032 tokens）由冷跑提供，仅作完整性与 JIT 成本备查。
+
+**Qwen3.5-4B-Uncensored-Q4_K_M + mmproj-BF16**（`n_ctx=8192`、`n_batch=2048`、`ctx_checkpoints=-1`、`memory_cleanup=full_cleanup`）：
+
+| 指标 | 大图 2336×1760（热） | 大图 1792×2304（冷，仅备查） |
+|------|----------------------|------------------------------|
+| 视觉 token 数 | 4015 | 4032 |
+| 图像编码 `clip_encode` | **11233 ms** | 26731 ms |
+| 图像解码 | 1125 + 1451 ms | 3935 + 3161 ms |
+| `prompt eval` | **1328.76 t/s**（3041.93 ms / 4042 tok） | 31.59 t/s（128494.43 ms / 4059 tok） |
+| 生成 | **90.02 t/s**（12897.76 ms / 1161 runs） | 90.53 t/s（13774.83 ms / 1247 runs） |
+| 总耗时 | 42.03 s | 191.62 s |
+| `load time` | 131.20 ms | 66111.51 ms |
+| `graphs reused` | 1155 | 1241 |
+| `graph reallocs` | 0 / 0 | 0 / 0 |
+| SYCL 计算缓冲 | 513.0216 / 28.0254 MiB | 同左 |
+
+**与 0.4.6 的对比**（速率类指标）：
+
+| 项 | 0.4.6 | 0.4.7 | Δ |
+|----|-------|-------|---|
+| `prompt eval`（热） | 1330.03 t/s | **1328.76 t/s** | **−0.10%（持平）** |
+| 生成（热） | 90.66 t/s | **90.02 t/s** | **−0.71%（噪声内）** |
+| 生成（冷） | 89.89 t/s | **90.53 t/s** | +0.7%（噪声内） |
+| SYCL 计算缓冲 | 513.0216 / 28.0254 MiB | 同左 | 一致 |
+
+> **为什么本版没有性能提升（重要，勿误读上游数据）**：本次 SYCL 侧的 13 项改动**没有一项面向 `mul_mat` 吞吐** —— 逐项性质为：打包修复（`#32005`）、显存分配防护（`#31285`）、线程安全与失败记忆化（`#31138`）、`CLAMP` 正确性（`#31784`）、精度语义对齐（`#31896`）、device-id 缓存微优化（`#31126` / `#32013`）、AOT（`#31873`）、MoE 调度（`#30156`）、Alchemist 专用解禁（`#31574`）、YaRN（`#30802`）、CPY 舍入精度（`#31465`）、`SWIGLU_OAI` f16（`#30857`）。因此 **prefill 与生成双双持平正是预期结果**，而非"优化失效"；0.4.6 的 +5.9% 生成提升来自 `#31013` / `#31008` / `#31325` 那批 MMVQ 模板化，本版无同类提交。
+>
+> **冷跑数据为何不能横比**：冷跑 `load time` 66.1 s、`clip_encode` 26.7 s、`prompt eval` 31.59 t/s —— 原因是**全新 DLL 使 Level Zero 的 program cache 全部失效、kernel 被全量重新 JIT**。该成本**一次性**，第二次运行 `load time` 即回落至 **131 ms**，`prompt eval` 恢复至 1328.76 t/s。**但生成速度（90.53 t/s）在冷跑时已正常**，因为 decode 所需 kernel 在 encode 阶段就已完成 JIT。
+>
+> **生成速度两次独立读数一致性**：冷跑 90.53、热跑 90.02，跨两种图像尺寸与两种 cache 状态的偏差仅 **0.57%**，说明该指标稳定可复现，与 0.4.6 的 90.66 差异属测量噪声（历史同版本间波动即在此量级）。
+
+### Environment
+
+| Item | Version |
+|------|---------|
+| Python | 3.13.11 |
+| Intel oneAPI | **2026.2.0 Build 20261001**（icx，clang 23） |
+| oneDNN | 3.13.2（随 oneAPI 2026.2 分发，版本目录仍为 2026.1） |
+| GPU | Intel Arc B580 Graphics（160 CU / 12526 MB / `Reorder=Y`） |
+| SYCL runtime / driver | 20.1 / 1.17.39894+4 |
+| 构建工具链 | Visual Studio 2022 BuildTools 17.14.27 + oneAPI `icx` 2026.2（`-fsycl`） |
+
 ## [0.4.6+sycl] - 2026-11-07
 
 ### Changed from JamePeng (upstream 0.4.6)

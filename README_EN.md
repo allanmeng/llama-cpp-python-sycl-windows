@@ -8,67 +8,77 @@ Compiled from [JamePeng's fork](https://github.com/JamePeng/llama-cpp-python) wh
 
 ---
 
-## Latest Release Notes (v0.4.6+sycl · 2026-11-07)
+## Latest Release Notes (v0.4.7+sycl · 2026-11-13)
 
-**Key highlights: native API alignment (context per-sequence budgets / MTMD audio-video ABI) + ~5% faster generation (measured on B580) + Chatterbox & Drama 3 TTS**
+**Key highlights: oneAPI 2026.2 build migration + the exclusion list grows to 6 DLLs (now including `mkl_intel_thread.3.dll`) + performance on par with 0.4.6 + upstream MTP device states and multi-GGUF shard support**
 
-- Upgraded to llama-cpp-python **0.4.6** (based on JamePeng `1dd04be`, llama.cpp `18ab62a8e` = b12174, **304 submodule commits**, zero local patches; **30 commits** since 0.4.5's `3fc39b2`, two of which only bump the version and fix macOS CI)
-- **New `n_ctx_seq()` (the most important behaviour change)**: `n_ctx()` stays the total native capacity, while the new `n_ctx_seq()` governs generation, context shifting and multimodal capacity checks; oversized embedding inputs with `truncate=False` are rejected early. **The per-sequence window only shrinks when `n_seq_max > 1` and `kv_unified=False`** — this plugin never passes `n_seq_max` (default 1), so it is **unaffected**
-- **MTMD audio/video ABI alignment**: audio stream, generation input/info, video and clip parameter layouts updated; missing queries and bindings added; **`video_no_soundtrack`** added and folded into media cache identity, with Qwen3-VL video formatting and LFM3 visual-boundary normalization aligned. `GenericMTMDChatHandler` only **appends** the new parameter at the end of its signature — **backwards compatible**
-- **GGML enum / graph ABI fixes + tensor API extensions**: shifted op IDs corrected, graph UID field added, optimizer and graph-build enum classes split; FP8 E4M3 definitions, precision enums and batched tensor copy/set/get added. **New `LlamaContext.supports_embd_row` / `set_embeddings_layer_inp_dev`, `LlamaBatchExt.add_embd_row`**
-- **Chatterbox / Drama 3 TTS**: non-streaming Chatterbox Turbo / Multilingual V3 and Drama 3 synthesis, Pocket voices embedded in weights; multilingual backbone CFG metadata and unified KV validated, explicit `n_seq_max` no longer doubled. **Pure TTS, unrelated to the vision path**
-- **Gemma4 shared-KV MTP prefill optimization**: upstream measured prefill **142.5 → 98.9 ms (−30.6%)**, first token −26.4%, end-to-end +3.6% on RTX 5090; **requires an MTP draft model — this plugin uses no speculative decoding, so it does not apply**
-- **SYCL backend gains** (304 llama.cpp commits, 14 SYCL-specific): **plain MMVQ launch triple templating (`#31013`)** and **per-quant concat templating (`#31008`)** — Q4_K single-column takes the XMX path, but **Q6_K / Q5_K single-column stay below `min_cols=2` and keep using plain MMVQ**, so these land directly and are **the source of the ~5% generation gain**; `#31062` bounds reorder temp memory to **32 MiB**; `#31146` relaxes scale to non-contiguous views; `#31110` work-group argmax for short TOP_K rows
-- **⚠️ `#30976` (upstream: Q4_K prefill +14.7%–15.3%) gives this plugin zero benefit — do not expect upstream numbers**: it only optimizes **primed prefill** (prefill after reorder is installed). The source (`ggml-sycl.cpp:5087`) shows reorder is installed **lazily** and only for `src1->ne[1] <= 8` mul_mats, so **prefill's `ne[1]=2048/4032` never triggers it**; and since the plugin builds a fresh `Llama()` per workflow, the flag is reset with the buffer — single-turn image captioning always lands in the *"fresh-layout prefill … **unchanged**"* regime the upstream commit itself calls out. **Measured prefill 1330.03 vs 0.4.3's 1331.59 t/s — flat. By design, not a B580 defect, not a regression**
-- **Other items that do not apply**: `#31125` DPAS flash attention needs a `q4_0`/`q8_0` KV cache (plugin `type_k`/`type_v` default to `auto` = f16); `#30956` is a B70-only comm_exchange (irrelevant on a single B580); `#30358` `set_tensor_2d` targets tensor-split loading (no sharding on one card)
-- **Memory footprint identical to 0.4.3 / 0.4.5**: `SYCL0 compute buffer` **513.02 MiB**, `SYCL_Host` **28.03 MiB**, `matches expectation` across three runs (one cold, two warm) — no growth, no leak
-- **1 new SYCL environment variable**: `GGML_SYCL_FA_DPAS`(1) — DPAS flash attention for quantized KV caches, only effective when the KV cache is `q4_0`/`q8_0`; the **other 29 env vars are unchanged from 0.4.5**, and `GGML_SYCL_ENABLE_GRAPH` still defaults to `0`
-- **⚠️ Self-build note (introduced by upstream `#31076`)**: the Level Zero lookup moved from `find_library` to `pkg_check_modules`, but the fallback branch sits under `if(PkgConfig_FOUND)` — a machine that **has pkg-config but no `level-zero.pc` will silently skip L0 with no warning**. Always check `GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes` in the startup log
+- Upgraded to llama-cpp-python **0.4.7** (based on JamePeng `c7c7055`, llama.cpp `2a4daf0e0` = b12345, **171 submodule commits**, zero local patches; **16 commits** since 0.4.6's `1dd04be`, one of which only bumps the version and five only move the submodule pointer)
+- **🆕 The exclusion list grows from 5 to 6 DLLs (the change you most need to know about)**: **`mkl_intel_thread.3.dll` (38.95 MiB)** is now excluded too — the `ggml-sycl.dll` built with oneAPI 2026.2 imports it, and shipping it would inflate the wheel from 43 MB to about **84 MB**. Full exclusion list: `dnnl.dll`, `mkl_core.3.dll`, `mkl_sycl_blas.6.dll`, `mkl_tbb_thread.3.dll`, `tbb12.dll`, `mkl_intel_thread.3.dll`, so the **wheel stays at 43 MB (43.13 MiB)**. Upstream landed **`#32005`** doing the very same thing for its Windows SYCL release package — this is a general 2026.2 issue
+- **⚠️ `setvars.bat` is mandatory**: every excluded DLL must come from the target machine's oneAPI. **Drop `setvars.bat` from your launcher and `ggml-sycl.dll` fails to load and silently falls back to CPU, with no loud error.** A "no-setvars" variant (bundling 12 extra DLLs and rewiring the `lib/` search path) was tried and rejected: B580 on 2026.2 requires the **Level Zero v2 adapter**, but `ur_adapter_level_zero_v2.dll` fails with **error 127 (missing entry point)**, falling back to `[opencl:gpu:0]`
+- **oneAPI 2026.2 build migration**: compiler moves from clang **22 to 23** (`icx` 2026.2.0 Build 20261001) with **no build-flag changes**; the bundled oneDNN is still **3.13.2** (the 2026.2 installer's `dnnl` directory still points at 2026.1) and no runtime DLL was renamed. **This wheel is built and measured with 2026.2. If you are still on 2026.1**, the required runtime DLL names match (2026.1 also ships `mkl_intel_thread.3.dll`), but that combination is **not tested here** — just load it through `setvars.bat` as usual
+- **Upstream core highlights** (all backwards compatible for this plugin): **MTP device-side hidden-state transfer** (new `draft_n_ubatch`, `LLAMA_MTP_DEV=0` forces the host path; this plugin uses no speculative decoding, so it does not apply); **`Llama(model_shards=...)` / `SpecConfig.draft_model_shards`** for extra GGUF shards and external PLE tables; **bindings alignment** (NextN device-state, architecture-capability, decision-label, `moe_cache_cpu_share`); **MTMD audio ABI + mono f32 PCM streaming resampler + Kimi K3.1 image placeholders**; **grammar** gains numeric `allOf` intersections and corrected chess / Japanese-rules grammars (`llama_grammar.py` changes for the first time)
+- **⚠️ Self-builders must pin vendor to `2a4daf0e0`**: upstream states this revision sits **before** `ggml : prune` (`29dbbad2b`) and `llama : prune` (`8ca5a8008`), and that native libraries **must be rebuilt from it** to match the updated context and audio parameter ABIs. **This build uses exactly that revision — do not rebuild from a later prune commit**
+- **None of the 13 SYCL items targets throughput, so performance is flat versus 0.4.6 (expected)**: **`#31285` rejects over-VRAM allocations and adds `GGML_SYCL_BMG_VRAM_CHECK` (default 1)** — applies to **BMG only**, so **it is on by default on B580**; an oversized allocation now logs `cannot allocate ... MiB` and is refused instead of crashing the driver; `#31138` makes the oneDNN FA cache thread-safe; `#31784` fixes `CLAMP` for strided views; `#31896` MUL_MAT src1 precision gating (the F32 path here is unchanged); `#31126`/`#32013` cache the device-id; `#31873` AOT above 4 GB (we run JIT); `#30156` device-side MoE scheduler (dense model, does not apply); `#31574` is **Alchemist / A770 only**, not B580; `#30802` YaRN (not enabled); `#30857` `SWIGLU_OAI` f16 (this build has `F16: no`); `#31465` CPY rounding precision (model has none of those types)
+- **⚠️ One easy misread**: `#31084` (CUDA / Metal radix Top-K determinism) **contains no SYCL code changes** (only `ggml-cuda`, `ggml-metal` and tests), so it must not be counted as a SYCL item
+- **Plugin compatibility: zero changes needed**: `Llama.__init__` **76 params**, `create_chat_completion` **55 params**, `GenericMTMDChatHandler.__init__` **6 params** — all identical to 0.4.6. [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) needs no changes
+- **New APIs all live in `_internals` (easy trap when writing probe scripts)**: `suppress_tokens` / `classifier_free_guidance` are on `llama_cpp._internals.LlamaModel`, and `supports_embd_row` / `set_embeddings_layer_inp_dev` on `llama_cpp._internals.LlamaContext` — **the top-level `llama_cpp` package does not export `LlamaModel` / `LlamaContext`**, so `hasattr(llama_cpp.LlamaModel, ...)` reports a false negative
+- **Memory footprint identical to 0.4.3 / 0.4.5 / 0.4.6**: `SYCL0 compute buffer` **513.02 MiB**, `SYCL_Host` **28.03 MiB**, `matches expectation` on both cold and warm runs — no growth, no leak; the new BMG VRAM check **did not fire** on the 4032-token large image
+- **2 new SYCL environment variables**: **`GGML_SYCL_BMG_VRAM_CHECK`** (default `1`, BMG VRAM check, set `0` to disable) and **`GGML_SYCL_MMID_SCHED`** (default `1`, device-side MoE scheduling, MoE models only); nothing was removed, other defaults are unchanged, and `GGML_SYCL_ENABLE_GRAPH` still defaults to `0`
+- **Build note**: clean single pass (10 min 28 s); the `-fsycl` device compile **deadlocked a second time** at `fattn-vec-instance-q4_0-f16.cpp` (CPU flat), and a process-tree kill plus a rerun cleared it — same root cause as the 0.4.5 link-stage deadlock, **not a code issue**
 - **⚠️ Known integration note (carried over from 0.3.48 / 0.3.49 / 0.4.0 / 0.4.1 / 0.4.2 / 0.4.3 / 0.4.5): hybrid vision model + `ctx_checkpoints=0` first-decode crash**
 
 - Symptom: hybrid vision models with SWA layers (e.g. Qwen3.5), on large images (~4000+ vision tokens), prefill succeeds but **first decode token crashes** (`failed to prepare attention ubatches` / `failed to find a memory slot for batch of size 1`)
 - Root cause: caller passing `ctx_checkpoints=0` forces the hybrid model down a "Bypassing rollback" fast-path that has no slot headroom for the first decode token on large prefills
-- **Status in this release: still not re-tested specifically.** Upstream 0.4.4 ships `fix(state): preserve valid prefix reuse with checkpoints disabled`, which is closely related to this validation path and **may well be the fix — but it has not been verified here**; 0.4.6 adds another round of safety cleanup around context capacity and sampler lifetime (`n_ctx_seq`, early rejection of oversized embedding inputs, samplers retained until context destruction). All three hardware runs kept `ctx_checkpoints=-1` and did not trigger the issue
+- **Status in this release: still not re-tested specifically.** 0.4.6 added a round of safety cleanup around context capacity and sampler lifetime (`n_ctx_seq`, early rejection of oversized embedding inputs, samplers retained until context destruction), and 0.4.7 aligns context parameters with `moe_cache_cpu_share`; both hardware runs in this release (cold + warm) kept `ctx_checkpoints=-1` and did not trigger the issue
 - Workaround: **keep the default `ctx_checkpoints=-1`**
 - **✅ Official recommended plugin fixed**: [comfyui-sg-llama-cpp](https://github.com/allanmeng/comfyui-sg-llama-cpp) changed the default to `-1` in `1f0fc15` with a reactive `n_ctx` hint. No manual handling needed when using this plugin
 - **This wheel has no such bug**: pure `llama_cpp.Llama` on the same model + large image at `n_ctx=8192` verified working
 
-**🚀 Measured performance (Qwen3.5-4B vision model + images, 0.4.6, Intel Arc B580):**
+**🚀 Measured performance (Qwen3.5-4B vision model + images, 0.4.7, Intel Arc B580):**
 
-> ✅ **The test machine is back on an Intel Arc B580 Graphics with the exact same driver as 0.4.3** (SYCL 20.1 / `1.17.39894+4` / 160 CUs / `Reorder=Y`), so the tables below include a **strict cross-version comparison**.
+> ✅ The test machine is an **Intel Arc B580 Graphics** with the exact same driver as 0.4.6 (SYCL 20.1 / `1.17.39894+4` / 160 CUs / `Reorder=Y`), so the hardware side introduces no variable. **⚠️ However the warm run does not use the same image as the 0.4.6 baseline** (0.4.7: **2336×1760 / 4015 tokens**; 0.4.6: **1792×2304 / 4032 tokens**), so **only rate metrics get a cross-version Δ — image encode time and total time are not compared**.
 
-| Metric | Small image 928×1152 (warm) | Large image 1792×2304 (warm) |
-|--------|------------------------------|------------------------------|
-| Vision tokens | 1044 | 4032 |
-| Image encode time | **928 ms** (clip_encode) | **11158 ms** (clip_encode) |
-| Image decode time | 750 ms (batch 1/1) | 1127 ms (1/2) + 1427 ms (2/2) |
-| Prompt eval | 1033.47 t/s | **1330.03 t/s** (3051.80 ms / 4059 tokens) |
-| Generation speed | 94.43 t/s (eval 18351.58 ms / 1733 runs) | **90.66 t/s** (eval 11449.51 ms / 1038 runs) |
-| Total time | 31.77 s | 38.22 s |
-| load time | 131.87 ms | 132.70 ms |
+| Metric | Large image 2336×1760 (warm) | Large image 1792×2304 (cold, reference only) |
+|--------|------------------------------|----------------------------------------------|
+| Vision tokens | 4015 | 4032 |
+| Image encode time | **11233 ms** (clip_encode) | 26731 ms (clip_encode) |
+| Image decode time | 1125 ms (1/2) + 1451 ms (2/2) | 3935 ms (1/2) + 3161 ms (2/2) |
+| Prompt eval | **1328.76 t/s** (3041.93 ms / 4042 tokens) | 31.59 t/s (128494.43 ms / 4059 tokens) |
+| Generation speed | **90.02 t/s** (eval 12897.76 ms / 1161 runs) | 90.53 t/s (eval 13774.83 ms / 1247 runs) |
+| Total time | 42.03 s | 191.62 s |
+| load time | 131.20 ms | 66111.51 ms |
 | SYCL compute buffer | SYCL0 513.02 MiB / SYCL_Host 28.03 MiB | same as left |
 
-**Against 0.4.3, same image and same token count** (1792×2304 / 4032 tokens, both warm):
+**Against 0.4.6 — rate metrics only** (different images):
 
-| Item | 0.4.3 | 0.4.6 | Δ |
+| Item | 0.4.6 | 0.4.7 | Δ |
 |------|-------|-------|---|
-| Prompt eval | 1331.59 t/s | 1330.03 t/s | **flat (−0.12%)** |
-| Generation speed | 85.59 t/s | 90.66 t/s | **+5.9%** |
-| Image encode | 11030 ms | 11158 ms | +1.2% (noise) |
-| Total time | 40.58 s | 38.22 s | −5.8% |
+| Prompt eval (warm) | 1330.03 t/s | **1328.76 t/s** | **flat (−0.10%)** |
+| Generation speed (warm) | 90.66 t/s | **90.02 t/s** | −0.71% (within noise) |
+| Generation speed (cold) | 89.89 t/s | **90.53 t/s** | +0.7% (within noise) |
+| SYCL compute buffer | 513.02 / 28.03 MiB | same | identical |
 
-> Test scene: Qwen3.5-4B-Uncensored-Q4_K_M + mmproj-BF16, hybrid architecture (with SWA layers), `ctx_checkpoints=-1`, `n_ctx=8192`, `n_batch=2048` (large image fed as `2048 + 1984`).
+> Test scene: Qwen3.5-4B-Uncensored-Q4_K_M + mmproj-BF16, hybrid architecture (with SWA layers), `ctx_checkpoints=-1`, `n_ctx=8192`, `n_batch=2048` (large image fed as `2048 + 1967`).
 >
-> **Flat prefill is expected**: `#30976`'s +14.7% applies only to primed prefill after reorder is installed (see above); this plugin builds a fresh model instance each run, which is the "unchanged" case the upstream commit itself documents.
+> **Why this release gains nothing — expected, not a failed optimization**: the 13 SYCL items break down as packaging fix (`#32005`), allocation guard (`#31285`), thread safety and failure memoization (`#31138`), `CLAMP` correctness (`#31784`), precision semantics (`#31896`), device-id caching micro-optimizations (`#31126` / `#32013`), AOT (`#31873`), MoE scheduling (`#30156`), an Alchemist-only un-gate (`#31574`), YaRN (`#30802`), CPY rounding precision (`#31465`), and `SWIGLU_OAI` f16 (`#30857`) — **none targets `mul_mat` throughput**. 0.4.6's +5.9% came from the `#31013` / `#31008` / `#31325` MMVQ templating batch, and this release has no comparable commit.
 >
-> **The cold-run figure (182.98 s) is not meaningful**: on a brand-new DLL, `load time` hits 65.9 s and prompt eval drops to 33.76 t/s — all three stages degrade together by 1.7–12.6× because Level Zero's program cache is fully invalidated and every kernel is re-JITed. **That cost is one-off**; the second run returns to the numbers above.
+> **The two independent generation readings agree closely**: 90.53 cold, 90.02 warm — only **0.57%** apart across two image sizes and two cache states, so the metric is stable and reproducible; the gap to 0.4.6's 90.66 is measurement noise.
+>
+> **The cold-run figure (191.62 s) cannot be compared**: on a brand-new DLL, `load time` hits 66.1 s, `clip_encode` 26.7 s and prompt eval 31.59 t/s because Level Zero's program cache is fully invalidated and every kernel is re-JITed. **That cost is one-off** — the second run drops `load time` to 131 ms and restores prompt eval to 1328.76 t/s. Generation speed is already normal in the cold run, because the decode kernels finish JITing during encode.
 
 **Community feedback:**
 
 > ✅ **"Qwen 3.8 27B working fine with `llama_multimodal.GenericMTMDChatHandler`"** — vision model compatibility confirmed
 > See: https://github.com/JamePeng/llama-cpp-python/discussions/169#discussioncomment-18036209
 
-**Wheel**: `llama_cpp_python-0.4.6+sycl-cp313-cp313-win_amd64.whl` (~**43 MB**, slim build, requires oneAPI 2026.1)
+**Wheel**: `llama_cpp_python-0.4.7+sycl-cp313-cp313-win_amd64.whl` (**43.13 MiB / 45,220,961 B**, md5 `cbede18e0214fadc5c980d773a9e43ac`, slim build, **requires oneAPI 2026.2** and `setvars.bat` in the launcher)
+
+> 📥 **Download oneAPI 2026.2**
+>
+> - Official: https://www.intel.com/content/www/us/en/developer/tools/oneapi/oneapi-toolkit-download.html
+> - Mirror (Quark): https://pan.quark.cn/s/be61433cc224
+>
+> The official page is a generic entry point — **pick 2026.2 manually** in the downloader (don't accidentally install a newer or older release); the mirror is a fixed build. Close ComfyUI and any other consumer before installing, **reboot** afterwards, and make sure `call setvars.bat` is still in your launcher — the log must show `GGML_SYCL_SUPPORT_LEVEL_ZERO_API: yes` and `[level_zero:gpu:0]`, otherwise the backend has **silently fallen back to CPU**.
 
 ---
 
@@ -98,7 +108,7 @@ pip uninstall llama-cpp-python -y
 #### Step 2: Install the New Wheel
 
 ```bat
-pip install llama_cpp_python-0.4.6+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.7+sycl-cp313-cp313-win_amd64.whl
 ```
 
 #### Step 3: Update Your ComfyUI Plugin
@@ -139,7 +149,11 @@ Starting from 0.3.43, the build environment was upgraded to **Intel oneAPI Base 
 
 ### 2. Wheel packaging: Option A (slim build, no oneAPI runtime bundled)
 
-Starting from 0.3.45, the published wheels use **Option A (slim)**: oneAPI runtime DLLs are **NOT bundled** (`dnnl.dll`, `mkl_core.3.dll`, `mkl_sycl_blas.6.dll`, `mkl_tbb_thread.3.dll`, `tbb12.dll` are all removed), keeping the wheel at ~36–37 MB. The target machine therefore **MUST have Intel oneAPI pre-installed** (the SYCL core runtime `sycl9.dll` / `OpenCL.dll` and the numeric libraries above are provided by oneAPI).
+Starting from 0.3.45, the published wheels use **Option A (slim)**: oneAPI runtime DLLs are **NOT bundled** (`dnnl.dll`, `mkl_core.3.dll`, `mkl_sycl_blas.6.dll`, `mkl_tbb_thread.3.dll`, `tbb12.dll` are all removed), keeping the wheel at ~36–43 MB.
+
+> **🆕 Since 0.4.7 the exclusion list has 6 entries**: **`mkl_intel_thread.3.dll`** (38.95 MiB) is now excluded as well — the `ggml-sycl.dll` built with oneAPI 2026.2 imports it. Without the exclusion the wheel would grow from 43 MB to about 84 MB. **Like every other excluded item, this DLL is supplied by the target machine's oneAPI**, so `setvars.bat` in your launcher is not optional.
+
+The target machine therefore **MUST have Intel oneAPI pre-installed** (the SYCL core runtime `sycl9.dll` / `OpenCL.dll` and the numeric libraries above are provided by oneAPI).
 
 > **⚠️ Note**: `libomp140.x86_64.dll` **IS kept** in the wheel (the OpenMP preload fix depends on it) — do not delete it.
 
@@ -184,8 +198,8 @@ The SYCL runtime depends on Intel oneAPI. You do **not** need to install the ful
 | Component | Why needed |
 |-----------|-----------|
 | Intel oneAPI DPC++/C++ Compiler | Provides the SYCL compiler (icx) and `OpenCL.dll` |
-| Intel oneAPI DPC++ Library | Provides `sycl9.dll` runtime (oneAPI 2026.1) |
-| Intel oneAPI Math Kernel Library (oneMKL) | Provides MKL SYCL runtime |
+| Intel oneAPI DPC++ Library | Provides `sycl9.dll` runtime (oneAPI 2026.2) |
+| Intel oneAPI Math Kernel Library (oneMKL) | Provides `mkl_core.3.dll`, `mkl_sycl_blas.6.dll`, `mkl_tbb_thread.3.dll`, and **`mkl_intel_thread.3.dll` (new dependency as of 0.4.7)** |
 | Intel oneAPI Deep Neural Network Library (oneDNN) | Provides `dnnl.dll` |
 | Intel oneAPI Threading Building Blocks (oneTBB) | Provides `tbb12.dll` |
 
@@ -211,6 +225,7 @@ https://www.intel.com/content/www/us/en/developer/tools/oneapi/base-toolkit-down
 
 | Version | File | Size |
 |---------|------|------|
+| 0.4.7 | `llama_cpp_python-0.4.7+sycl-cp313-cp313-win_amd64.whl` | ~43 MB |
 | 0.4.6 | `llama_cpp_python-0.4.6+sycl-cp313-cp313-win_amd64.whl` | ~43 MB |
 | 0.4.5 | `llama_cpp_python-0.4.5+sycl-cp313-cp313-win_amd64.whl` | ~42 MB |
 | 0.4.3 | `llama_cpp_python-0.4.3+sycl-cp313-cp313-win_amd64.whl` | ~39 MB |
@@ -244,7 +259,7 @@ Download from [Releases](https://github.com/allanmeng/llama-cpp-python-sycl-wind
 
 ```bat
 pip uninstall llama-cpp-python -y
-pip install llama_cpp_python-0.4.6+sycl-cp313-cp313-win_amd64.whl
+pip install llama_cpp_python-0.4.7+sycl-cp313-cp313-win_amd64.whl
 ```
 
 Uninstalling first ensures a clean state.
@@ -403,12 +418,12 @@ This folder has no nodes, no dependencies, and will never be touched by ComfyUI 
 
 | Item | Version |
 |------|---------|
-| GPU | Intel Arc Pro B70 32GB (measured in this release; B580 not re-tested) |
-| Driver | Latest (this release: SYCL 20.2 / driver 1.15.39183+4) |
+| GPU | Intel Arc B580 Graphics (160 CUs / 12526 MB / `Reorder=Y`) |
+| Driver | SYCL 20.1 / driver `1.17.39894+4` |
 | OS | Windows 11 x64 |
 | Python | 3.13.11 |
-| oneAPI | 2026.1 |
-| ComfyUI | 0.16.3 |
+| oneAPI | **2026.2.0 Build 20261001** (icx, clang 23) |
+| ComfyUI | 0.33.2 |
 
 ---
 
